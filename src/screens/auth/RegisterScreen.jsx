@@ -1,11 +1,12 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  KeyboardAvoidingView, Platform, StatusBar, Image,
-  TextInput as RNTextInput,
+  KeyboardAvoidingView, Platform, StatusBar, Image, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import { launchImageLibrary } from 'react-native-image-picker';
+import { pick, types, isErrorWithCode, errorCodes } from '@react-native-documents/picker';
 import { Colors } from '../../theme/colors';
 import TextInput from '../../components/common/TextInput';
 import PrimaryButton from '../../components/common/PrimaryButton';
@@ -13,11 +14,16 @@ import { SCREENS } from '../../constants';
 import { authApi, session } from '../../utils/api';
 
 const LOGO = require('../../assets/logo.jpeg');
-const BUSINESS_TYPES = ['Retailer', 'Dealer', 'Contractor', 'Distributor'];
-const OTP_LENGTH = 6;
+const MAX_DOCUMENT_SIZE = 5 * 1024 * 1024;
+const REGISTRATION_DOCUMENTS = [
+  { key: 'gst', field: 'gst', label: 'GST Certificate', hint: 'If GST registered', required: false, icon: 'receipt-outline', color: '#2980B9', bg: '#EBF5FB' },
+  { key: 'pan', field: 'pan', label: 'PAN Card', hint: 'Identity and tax proof', required: true, icon: 'card-outline', color: '#8E44AD', bg: '#F5EEF8' },
+  { key: 'reg', field: 'reg', label: 'Address Proof', hint: 'Shop or business address proof', required: true, icon: 'home-outline', color: '#E67E22', bg: '#FDF2E9' },
+  { key: 'trade', field: 'trade', label: 'Business Registration', hint: 'Optional', required: false, icon: 'business-outline', color: '#27AE60', bg: '#E8F8EF' },
+];
 
 export default function RegisterScreen({ navigation }) {
-  // Steps: 1 = Info, 2 = OTP Verify, 3 = Success
+  // Steps: 1 = Details, 2 = Documents, 3 = Success
   const [step, setStep] = useState(1);
 
   const [form, setForm] = useState({
@@ -29,24 +35,76 @@ export default function RegisterScreen({ navigation }) {
   const [loading, setLoading] = useState(false);
   const [agreed, setAgreed] = useState(false);
   const [apiError, setApiError] = useState('');
-
-  // OTP state
-  const [otp, setOtp] = useState(Array(OTP_LENGTH).fill(''));
-  const [otpErr, setOtpErr] = useState('');
-  const [devOtp, setDevOtp] = useState('');
-  const [timer, setTimer] = useState(0);
-  const [verificationToken, setVerificationToken] = useState('');
-  const otpRefs = useRef([]);
-  const timerRef = useRef(null);
+  const [documents, setDocuments] = useState({});
+  const [documentErrors, setDocumentErrors] = useState({});
+  const [documentUploadError, setDocumentUploadError] = useState('');
 
   const set = (key, val) => { setForm(p => ({ ...p, [key]: val })); setErrors(p => ({ ...p, [key]: undefined })); };
 
-  const startTimer = () => {
-    setTimer(30);
-    timerRef.current = setInterval(() => setTimer(p => {
-      if (p <= 1) { clearInterval(timerRef.current); return 0; }
-      return p - 1;
-    }), 1000);
+  const saveSelectedDocument = (document, file) => {
+    if (!file?.uri) return;
+    if (file.size && file.size > MAX_DOCUMENT_SIZE) {
+      Alert.alert('File too large', 'Each document must be 5 MB or smaller.');
+      return;
+    }
+    setDocuments(current => ({
+      ...current,
+      [document.key]: {
+        uri: file.uri,
+        type: file.type || 'application/octet-stream',
+        name: file.name || `${document.key}.jpg`,
+      },
+    }));
+    setDocumentErrors(current => ({ ...current, [document.key]: undefined }));
+    setDocumentUploadError('');
+  };
+
+  const chooseDocument = (document) => {
+    const options = [
+      {
+        text: 'Choose Photo',
+        onPress: async () => {
+          const result = await launchImageLibrary({ mediaType: 'photo', quality: 0.85, selectionLimit: 1 });
+          if (result.didCancel) return;
+          if (result.errorCode) {
+            Alert.alert('Gallery error', result.errorMessage || 'Could not select the image.');
+            return;
+          }
+          const asset = result.assets?.[0];
+          if (asset) saveSelectedDocument(document, {
+            uri: asset.uri,
+            type: asset.type || 'image/jpeg',
+            name: asset.fileName || `${document.key}.jpg`,
+            size: asset.fileSize,
+          });
+        },
+      },
+      {
+        text: 'Choose PDF / File',
+        onPress: async () => {
+          try {
+            const [file] = await pick({ type: [types.pdf, types.images] });
+            if (file) saveSelectedDocument(document, file);
+          } catch (error) {
+            if (isErrorWithCode(error) && error.code === errorCodes.OPERATION_CANCELED) return;
+            Alert.alert('File error', error?.message || 'Could not select the document.');
+          }
+        },
+      },
+    ];
+    if (documents[document.key]) {
+      options.push({
+        text: 'Remove Selected File',
+        style: 'destructive',
+        onPress: () => setDocuments(current => {
+          const next = { ...current };
+          delete next[document.key];
+          return next;
+        }),
+      });
+    }
+    options.push({ text: 'Cancel', style: 'cancel' });
+    Alert.alert(document.label, 'Upload a clear image or PDF (maximum 5 MB).', options, { cancelable: true });
   };
 
   // ── Step 1 Validation ──
@@ -65,45 +123,33 @@ export default function RegisterScreen({ navigation }) {
     return Object.keys(e).length === 0;
   };
 
-  // ── Step 1 → Send OTP ──
-  const handleSendOtp = async () => {
+  // ── Step 1 → Documents ──
+  const handleContinueToDocuments = () => {
     setApiError('');
     if (!validate()) return;
+    setStep(2);
+  };
+
+  const validateDocuments = () => {
+    const nextErrors = {};
+    REGISTRATION_DOCUMENTS.forEach(document => {
+      if (document.required && !documents[document.key]) {
+        nextErrors[document.key] = `${document.label} is required`;
+      }
+    });
+    setDocumentErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  };
+
+  // ── Step 2 → Register & Upload Documents ──
+  const handleRegister = async () => {
+    if (loading) return;
+    setApiError('');
+    if (!validateDocuments()) return;
+
     setLoading(true);
+    let accountCreated = false;
     try {
-      const data = await authApi.sendOtp(form.mobile.trim(), 'register');
-      setDevOtp(data?.otp || '');
-      setLoading(false);
-      setStep(2);
-      startTimer();
-    } catch (err) {
-      setLoading(false);
-      setApiError(err.message || 'Could not send OTP. Please try again.');
-    }
-  };
-
-  // ── OTP input handlers ──
-  const otpChange = (v, i) => {
-    if (!/^\d*$/.test(v)) return;
-    const a = [...otp]; a[i] = v.slice(-1); setOtp(a); setOtpErr('');
-    if (v && i < OTP_LENGTH - 1) otpRefs.current[i + 1]?.focus();
-  };
-  const otpKey = (e, i) => {
-    if (e.nativeEvent.key === 'Backspace' && !otp[i] && i > 0) otpRefs.current[i - 1]?.focus();
-  };
-
-  // ── Step 2 → Verify OTP & Register ──
-  const handleVerifyAndRegister = async () => {
-    const code = otp.join('');
-    if (code.length < OTP_LENGTH) { setOtpErr('Enter the complete 6-digit OTP'); return; }
-    setOtpErr('');
-    setLoading(true);
-    try {
-      // Verify OTP → get verification token
-      const verifyData = await authApi.verifyOtp(form.mobile.trim(), code, 'register');
-      const token = verifyData?.verification_token || '';
-
-      // Register with verification token
       const regData = await authApi.register({
         companyName: form.companyName.trim(),
         ownerName: form.ownerName.trim(),
@@ -116,31 +162,44 @@ export default function RegisterScreen({ navigation }) {
         city: form.city.trim(),
         state: form.state.trim(),
         pincode: form.pincode.trim(),
-        verificationToken: token,
       });
+      accountCreated = true;
 
-      // Save the authenticated retailer session.
-      if (regData?.token) {
-        await session.save(regData.token, regData.user);
+      if (!regData?.token) {
+        throw new Error('Account created, but sign-in could not be completed. Please return to login.');
+      }
+      await session.save(regData.token, regData.user);
+
+      const selectedDocuments = REGISTRATION_DOCUMENTS.reduce((selected, document) => {
+        const file = documents[document.key];
+        if (file) selected[document.key] = { field: document.field, file };
+        return selected;
+      }, {});
+
+      // Registration is already complete at this point. If document upload
+      // fails, do not retry registration; show a retry-later message instead.
+      if (Object.keys(selectedDocuments).length > 0) {
+        try {
+          await authApi.uploadRegistrationDocs(selectedDocuments);
+          setDocumentUploadError('');
+        } catch (uploadError) {
+          setDocumentUploadError(
+            uploadError.message || 'Your account was created, but documents could not be uploaded. Sign in and upload them from Profile > Documents.',
+          );
+        }
       }
 
-      setLoading(false);
       setStep(3);
     } catch (err) {
+      if (accountCreated) {
+        setDocumentUploadError(err.message || 'Your account was created, but setup could not be completed. Please sign in and retry your document upload.');
+        setStep(3);
+      } else {
+        setApiError(err.message || 'Registration failed. Please try again.');
+      }
+    } finally {
       setLoading(false);
-      setOtpErr(err.message || 'Verification failed. Please try again.');
     }
-  };
-
-  // ── Resend OTP ──
-  const resendOtp = async () => {
-    if (timer > 0) return;
-    setOtp(Array(OTP_LENGTH).fill('')); setOtpErr('');
-    startTimer();
-    try {
-      const data = await authApi.sendOtp(form.mobile.trim(), 'register');
-      setDevOtp(data?.otp || '');
-    } catch (err) { setOtpErr(err.message || 'Could not resend OTP.'); }
   };
 
   // ═══════════════════════════════════════════════════════════════
@@ -177,11 +236,27 @@ export default function RegisterScreen({ navigation }) {
               </View>
             </View>
 
+            {documentUploadError ? (
+              <View style={s.successUploadWarning}>
+                <Ionicons name="warning-outline" size={18} color="#F59E0B" />
+                <Text style={s.successUploadWarningText}>
+                  Account created, but document upload needs attention. Sign in and retry from Profile → Documents.
+                </Text>
+              </View>
+            ) : null}
+
             {/* Info bullets */}
             <View style={s.infoBullets}>
               <InfoBullet icon="notifications-outline" text="You'll receive a notification once approved" />
               <InfoBullet icon="log-in-outline" text="Sign in with your mobile number after approval" />
-              <InfoBullet icon="document-text-outline" text="Keep your KYC documents ready for upload" />
+              <InfoBullet
+                icon="document-text-outline"
+                text={documentUploadError
+                  ? 'Document upload is pending; retry after signing in'
+                  : Object.keys(documents).length > 0
+                    ? `${Object.keys(documents).length} document${Object.keys(documents).length === 1 ? '' : 's'} submitted for admin review`
+                    : 'You can upload KYC documents later from Profile > Documents'}
+              />
             </View>
 
             <PrimaryButton
@@ -197,92 +272,125 @@ export default function RegisterScreen({ navigation }) {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // STEP 2 — OTP Verification
+  // STEP 2 — Registration Documents
   // ═══════════════════════════════════════════════════════════════
   if (step === 2) {
     return (
       <View style={s.root}>
         <StatusBar barStyle="light-content" backgroundColor="#1A2340" />
         <SafeAreaView style={s.flex} edges={['top', 'bottom']}>
-          <KeyboardAvoidingView style={s.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-            <ScrollView contentContainerStyle={s.otpScroll} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets={true}>
+          <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
+            <View style={s.header}>
+              <TouchableOpacity style={s.backBtn} onPress={() => setStep(1)}>
+                <Ionicons name="arrow-back" size={22} color="#FFF" />
+              </TouchableOpacity>
 
-              {/* Blue Header */}
-              <View style={s.otpHeader}>
-                <TouchableOpacity style={s.backBtn} onPress={() => { setStep(1); clearInterval(timerRef.current); }}>
-                  <Ionicons name="arrow-back" size={22} color="#FFF" />
-                </TouchableOpacity>
-                <View style={s.otpHeaderIcon}>
-                  <Ionicons name="shield-checkmark" size={44} color="rgba(255,255,255,0.9)" />
+              <View style={s.headerContent}>
+                <View style={s.documentHeaderIcon}>
+                  <Ionicons name="document-attach" size={34} color="#FFFFFF" />
                 </View>
-                <Text style={s.otpHeaderTitle}>Verify Your Number</Text>
-                <Text style={s.otpHeaderSub}>
-                  We've sent a 6-digit OTP to{'\n'}
-                  <Text style={s.otpHeaderPhone}>+91 {form.mobile}</Text>
+                <Text style={s.headerTitle}>Upload Documents</Text>
+                <Text style={s.headerSubtitle}>
+                  Submit clear business documents for faster and secure admin verification
                 </Text>
               </View>
 
-              {/* OTP Card */}
-              <View style={s.otpCard}>
-                {/* Dev OTP Display */}
-                {devOtp ? (
-                  <View style={s.devOtpBox}>
-                    <Ionicons name="code-working-outline" size={14} color={Colors.primary} />
-                    <Text style={s.devOtpLabel}>Dev OTP: </Text>
-                    <Text style={s.devOtpCode}>{devOtp}</Text>
-                  </View>
-                ) : null}
+              <RegistrationSteps current={2} />
+            </View>
 
-                {/* OTP Input Row */}
-                <View style={s.otpRow}>
-                  {otp.map((d, i) => (
-                    <RNTextInput
-                      key={i}
-                      ref={r => (otpRefs.current[i] = r)}
-                      style={[s.otpBox, d && s.otpBoxFill, otpErr && s.otpBoxErr]}
-                      value={d}
-                      onChangeText={v => otpChange(v, i)}
-                      onKeyPress={e => otpKey(e, i)}
-                      keyboardType="number-pad"
-                      maxLength={1}
-                      textAlign="center"
-                      selectTextOnFocus
-                      autoFocus={i === 0}
-                    />
-                  ))}
+            <View style={s.formArea}>
+              <View style={s.requiredSummary}>
+                <Ionicons name="information-circle" size={20} color="#2563EB" />
+                <Text style={s.requiredSummaryText}>
+                  PAN Card and Address Proof are required. GST Certificate and Business Registration are optional.
+                </Text>
+              </View>
+
+              <View style={s.card}>
+                <View style={s.cardHeader}>
+                  <View style={[s.cardIconWrap, s.documentCardIcon]}>
+                    <Ionicons name="shield-checkmark" size={16} color="#F59E0B" />
+                  </View>
+                  <View style={s.documentHeaderCopy}>
+                    <Text style={s.cardTitle}>Registration Documents</Text>
+                    <Text style={s.documentIntro}>Tap a document to choose an image or PDF.</Text>
+                  </View>
+                  <View style={s.documentCountBadge}>
+                    <Text style={s.documentCountText}>{Object.keys(documents).length}/4</Text>
+                  </View>
                 </View>
 
-                {otpErr ? (
-                  <View style={s.otpErrRow}>
-                    <Ionicons name="alert-circle" size={14} color={Colors.error} />
-                    <Text style={s.otpErrText}>{otpErr}</Text>
-                  </View>
-                ) : null}
+                <View style={s.documentList}>
+                  {REGISTRATION_DOCUMENTS.map(document => {
+                    const file = documents[document.key];
+                    const error = documentErrors[document.key];
+                    return (
+                      <View key={document.key}>
+                        <TouchableOpacity
+                          style={[
+                            s.documentRow,
+                            file && s.documentRowSelected,
+                            error && s.documentRowError,
+                          ]}
+                          activeOpacity={0.75}
+                          onPress={() => chooseDocument(document)}
+                        >
+                          <View style={[s.documentIcon, { backgroundColor: file ? '#22C55E' : document.bg }]}>
+                            <Ionicons name={file ? 'checkmark' : document.icon} size={17} color={file ? '#FFFFFF' : document.color} />
+                          </View>
+                          <View style={s.documentCopy}>
+                            <View style={s.documentTitleRow}>
+                              <Text style={s.documentLabel}>{document.label}</Text>
+                              <Text style={document.required ? s.requiredTag : s.optionalTag}>
+                                {document.required ? 'Required' : 'Optional'}
+                              </Text>
+                            </View>
+                            <Text style={[s.documentHint, file && s.documentHintSelected]} numberOfLines={1}>
+                              {file ? file.name : document.hint}
+                            </Text>
+                          </View>
+                          <View style={[s.documentStatus, file && s.documentStatusSelected]}>
+                            <Text style={[s.documentStatusText, file && s.documentStatusTextSelected]}>
+                              {file ? 'Selected' : 'Add'}
+                            </Text>
+                          </View>
+                          <Ionicons name="chevron-forward" size={15} color="#9CA3AF" />
+                        </TouchableOpacity>
+                        {error ? <Text style={s.documentErrorText}>{error}</Text> : null}
+                      </View>
+                    );
+                  })}
+                </View>
 
-                {/* Verify Button */}
-                <PrimaryButton
-                  title="VERIFY & REGISTER"
-                  onPress={handleVerifyAndRegister}
-                  loading={loading}
-                  size="lg"
-                  style={s.otpBtn}
-                />
-
-                {/* Resend / Change */}
-                <View style={s.otpActions}>
-                  <TouchableOpacity onPress={resendOtp} disabled={timer > 0}>
-                    <Text style={[s.otpLink, timer > 0 && s.otpLinkDisabled]}>
-                      {timer > 0 ? `Resend in ${timer}s` : 'Resend OTP'}
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => { setStep(1); clearInterval(timerRef.current); }}>
-                    <Text style={s.otpLink}>Change Number</Text>
-                  </TouchableOpacity>
+                <View style={s.documentNote}>
+                  <Ionicons name="shield-checkmark-outline" size={14} color="#3B82F6" />
+                  <Text style={s.documentNoteText}>
+                    JPEG, PNG, WebP or PDF · Maximum 5 MB each · Visible only to authorized reviewers.
+                  </Text>
                 </View>
               </View>
 
-            </ScrollView>
-          </KeyboardAvoidingView>
+              {apiError ? (
+                <View style={s.apiErrBox}>
+                  <Ionicons name="alert-circle" size={16} color={Colors.error} />
+                  <Text style={s.apiErrText}>{apiError}</Text>
+                </View>
+              ) : null}
+
+              <PrimaryButton
+                title="REGISTER & SUBMIT"
+                onPress={handleRegister}
+                loading={loading}
+                size="lg"
+                style={s.submitBtn}
+              />
+              <TouchableOpacity style={s.secondaryBackButton} onPress={() => setStep(1)}>
+                <Ionicons name="arrow-back" size={16} color="#3B82F6" />
+                <Text style={s.secondaryBackText}>Back to details</Text>
+              </TouchableOpacity>
+              <View style={s.bottomSpace} />
+            </View>
+          </ScrollView>
         </SafeAreaView>
       </View>
     );
@@ -315,13 +423,7 @@ export default function RegisterScreen({ navigation }) {
               </View>
 
               {/* Step indicators */}
-              <View style={s.stepsRow}>
-                <StepPill num="1" label="Details" active />
-                <View style={s.stepConnector} />
-                <StepPill num="2" label="Verify" />
-                <View style={s.stepConnector} />
-                <StepPill num="3" label="Done" />
-              </View>
+              <RegistrationSteps current={1} />
             </View>
 
             {/* ═══ Form Section ═══ */}
@@ -465,9 +567,8 @@ export default function RegisterScreen({ navigation }) {
 
               {/* Submit Button */}
               <PrimaryButton
-                title="CONTINUE & VERIFY"
-                onPress={handleSendOtp}
-                loading={loading}
+                title="CONTINUE TO DOCUMENTS"
+                onPress={handleContinueToDocuments}
                 size="lg"
                 style={s.submitBtn}
               />
@@ -480,7 +581,7 @@ export default function RegisterScreen({ navigation }) {
                 </TouchableOpacity>
               </View>
 
-              <View style={{ height: 120 }} />
+              <View style={s.bottomSpace} />
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -490,6 +591,24 @@ export default function RegisterScreen({ navigation }) {
 }
 
 /* ── Sub-components ── */
+const REGISTRATION_STEPS = ['Details', 'Documents', 'Done'];
+
+const RegistrationSteps = ({ current }) => (
+  <View style={s.stepsRow}>
+    {REGISTRATION_STEPS.map((label, index) => {
+      const number = index + 1;
+      return (
+        <React.Fragment key={label}>
+          {index > 0 ? (
+            <View style={[s.stepConnector, current >= number && s.stepConnectorActive]} />
+          ) : null}
+          <StepPill num={String(number)} label={label} active={current >= number} />
+        </React.Fragment>
+      );
+    })}
+  </View>
+);
+
 const StepPill = ({ num, label, active }) => (
   <View style={s.stepPill}>
     <View style={[s.stepCircle, active && s.stepCircleActive]}>
@@ -558,9 +677,10 @@ const s = StyleSheet.create({
   stepLabel: { fontSize: 10, color: 'rgba(255,255,255,0.4)' },
   stepLabelActive: { color: '#3B82F6', fontWeight: '700' },
   stepConnector: {
-    width: 36, height: 2, backgroundColor: 'rgba(255,255,255,0.12)',
-    marginHorizontal: 8, borderRadius: 1,
+    width: 18, height: 2, backgroundColor: 'rgba(255,255,255,0.12)',
+    marginHorizontal: 4, borderRadius: 1,
   },
+  stepConnectorActive: { backgroundColor: '#3B82F6' },
 
   // ── Form Area ──
   formArea: { padding: 16, paddingTop: 20 },
@@ -581,6 +701,59 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   cardTitle: { fontSize: 15, fontWeight: '700', color: '#1A2340' },
+
+  // ── Registration documents ──
+  documentHeaderIcon: {
+    width: 64, height: 64, borderRadius: 20,
+    backgroundColor: 'rgba(59,130,246,0.20)',
+    alignItems: 'center', justifyContent: 'center', marginBottom: 12,
+  },
+  requiredSummary: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 9,
+    padding: 13, marginBottom: 14, borderRadius: 12,
+    backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE',
+  },
+  requiredSummaryText: { flex: 1, fontSize: 11.5, lineHeight: 17, color: '#1E40AF' },
+  documentCardIcon: { backgroundColor: '#FFF7ED' },
+  documentHeaderCopy: { flex: 1 },
+  documentIntro: { marginTop: 2, fontSize: 10.5, color: '#6B7280', lineHeight: 15 },
+  documentCountBadge: {
+    minWidth: 34, height: 25, paddingHorizontal: 8, borderRadius: 13,
+    backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center',
+  },
+  documentCountText: { fontSize: 10.5, fontWeight: '800', color: '#2563EB' },
+  documentList: { gap: 8 },
+  documentRow: {
+    minHeight: 60, flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 11, paddingVertical: 9, borderRadius: 11,
+    borderWidth: 1.2, borderColor: '#E5E7EB', backgroundColor: '#FAFBFC',
+  },
+  documentRowSelected: { borderColor: '#86EFAC', backgroundColor: '#F0FDF4' },
+  documentRowError: { borderColor: '#FCA5A5', backgroundColor: '#FEF2F2' },
+  documentIcon: {
+    width: 34, height: 34, borderRadius: 9, alignItems: 'center', justifyContent: 'center',
+  },
+  documentRowSelectedIcon: { backgroundColor: '#22C55E' },
+  documentCopy: { flex: 1, minWidth: 0 },
+  documentTitleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 5 },
+  documentLabel: { fontSize: 12.5, fontWeight: '700', color: '#1F2937' },
+  requiredTag: { fontSize: 8.5, fontWeight: '800', color: '#B91C1C', textTransform: 'uppercase' },
+  optionalTag: { fontSize: 8.5, fontWeight: '700', color: '#6B7280', textTransform: 'uppercase' },
+  documentHint: { marginTop: 2, fontSize: 10.5, color: '#9CA3AF' },
+  documentHintSelected: { color: '#15803D' },
+  documentStatus: {
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+  },
+  documentStatusSelected: { backgroundColor: '#DCFCE7' },
+  documentStatusText: { fontSize: 9.5, fontWeight: '700', color: '#6B7280' },
+  documentStatusTextSelected: { color: '#15803D' },
+  documentErrorText: { marginTop: 4, marginLeft: 4, fontSize: 10.5, color: Colors.error },
+  documentNote: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 11,
+    padding: 9, borderRadius: 9, backgroundColor: '#EFF6FF',
+  },
+  documentNoteText: { flex: 1, fontSize: 9.5, lineHeight: 14, color: '#4B5563' },
 
   // ── Chips ──
   chipLabel: {
@@ -627,65 +800,15 @@ const s = StyleSheet.create({
 
   // ── Submit ──
   submitBtn: { marginTop: 12 },
+  secondaryBackButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    minHeight: 44, marginTop: 10,
+  },
+  secondaryBackText: { fontSize: 13, fontWeight: '700', color: '#3B82F6' },
+  bottomSpace: { height: 120 },
   loginRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 18 },
   loginLabel: { fontSize: 14, color: '#6B7280' },
   loginLink: { fontSize: 14, color: '#3B82F6', fontWeight: '700' },
-
-  // ═══════════════════════════════════════════════
-  // OTP Screen Styles
-  // ═══════════════════════════════════════════════
-  otpScroll: { flexGrow: 1, paddingBottom: 80 },
-  otpHeader: {
-    backgroundColor: '#1A2340',
-    paddingTop: 12, paddingBottom: 36, paddingHorizontal: 20,
-    alignItems: 'center',
-    borderBottomLeftRadius: 28, borderBottomRightRadius: 28,
-  },
-  otpHeaderIcon: {
-    width: 72, height: 72, borderRadius: 36,
-    backgroundColor: 'rgba(59,130,246,0.15)',
-    alignItems: 'center', justifyContent: 'center',
-    marginBottom: 16, marginTop: 8,
-  },
-  otpHeaderTitle: { fontSize: 22, fontWeight: '800', color: '#FFFFFF', marginBottom: 8 },
-  otpHeaderSub: { fontSize: 13, color: 'rgba(255,255,255,0.55)', textAlign: 'center', lineHeight: 20 },
-  otpHeaderPhone: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
-
-  otpCard: {
-    margin: 20, marginTop: -16,
-    backgroundColor: '#FFFFFF', borderRadius: 20,
-    padding: 24,
-    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
-  },
-
-  devOtpBox: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    backgroundColor: '#FFF7ED', borderRadius: 10, padding: 10,
-    marginBottom: 20, borderWidth: 1, borderColor: '#FED7AA',
-  },
-  devOtpLabel: { fontSize: 12, color: '#9A3412', fontWeight: '500' },
-  devOtpCode: { fontSize: 18, fontWeight: '800', color: Colors.primary, letterSpacing: 4 },
-
-  otpRow: { flexDirection: 'row', justifyContent: 'center', gap: 10, marginBottom: 10 },
-  otpBox: {
-    width: 46, height: 54, borderRadius: 12,
-    backgroundColor: '#F9FAFB', borderWidth: 1.5, borderColor: '#E5E7EB',
-    fontSize: 22, fontWeight: '700', color: '#1A2340',
-    textAlign: 'center',
-  },
-  otpBoxFill: { borderColor: '#3B82F6', backgroundColor: '#EFF6FF' },
-  otpBoxErr: { borderColor: Colors.error },
-
-  otpErrRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 8 },
-  otpErrText: { fontSize: 12, color: Colors.error },
-
-  otpBtn: { marginTop: 20 },
-  otpActions: {
-    flexDirection: 'row', justifyContent: 'space-between', marginTop: 18,
-  },
-  otpLink: { fontSize: 13, fontWeight: '600', color: '#3B82F6' },
-  otpLinkDisabled: { color: '#9CA3AF' },
 
   // ═══════════════════════════════════════════════
   // Success Screen Styles
@@ -719,6 +842,12 @@ const s = StyleSheet.create({
   pendingTextWrap: { flex: 1 },
   pendingTitle: { fontSize: 13, fontWeight: '700', color: '#F59E0B', marginBottom: 4 },
   pendingDesc: { fontSize: 12, color: 'rgba(255,255,255,0.50)', lineHeight: 17 },
+  successUploadWarning: {
+    width: '100%', flexDirection: 'row', alignItems: 'flex-start', gap: 9,
+    padding: 12, marginTop: -12, marginBottom: 20, borderRadius: 11,
+    backgroundColor: 'rgba(245,158,11,0.10)', borderWidth: 1, borderColor: 'rgba(245,158,11,0.28)',
+  },
+  successUploadWarningText: { flex: 1, fontSize: 11, lineHeight: 16, color: '#FCD34D' },
 
   infoBullets: { width: '100%', gap: 12, marginBottom: 28 },
   bulletRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },

@@ -13,7 +13,7 @@ const TYPE_CONFIG = {
   system:   { icon: 'information-circle-outline', color: Colors.textSecondary, bgColor: Colors.background },
 };
 
-const NotificationCard = ({ notification, onPress }) => {
+const NotificationCard = ({ notification, onPress, onDelete }) => {
   const { type, title, message, isRead, createdAt } = notification;
   const config = TYPE_CONFIG[type] || TYPE_CONFIG.system;
 
@@ -44,7 +44,17 @@ const NotificationCard = ({ notification, onPress }) => {
         </View>
       </View>
 
-      <Ionicons name="chevron-forward" size={14} color={Colors.textTertiary} style={styles.arrow} />
+      {onDelete ? (
+        <TouchableOpacity
+          style={styles.deleteBtn}
+          onPress={onDelete}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="trash-outline" size={18} color={Colors.error} />
+        </TouchableOpacity>
+      ) : (
+        <Ionicons name="chevron-forward" size={14} color={Colors.textTertiary} style={styles.arrow} />
+      )}
     </TouchableOpacity>
   );
 };
@@ -127,6 +137,16 @@ const styles = StyleSheet.create({
   arrow: {
     marginLeft: Spacing.sm,
     flexShrink: 0,
+  },
+  deleteBtn: {
+    marginLeft: Spacing.sm,
+    flexShrink: 0,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.errorBg,
   },
 });
 

@@ -36,9 +36,9 @@ const TextInput = ({
   const [isFocused, setIsFocused] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
-  const handleFocus = () => {
+  const handleFocus = (e) => {
     setIsFocused(true);
-    onFocus && onFocus();
+    onFocus && onFocus(e);
   };
 
   const handleBlur = () => {
@@ -87,7 +87,7 @@ const TextInput = ({
           multiline={multiline}
           numberOfLines={multiline ? numberOfLines : 1}
           editable={editable}
-          onFocus={handleFocus}
+          onFocus={(e) => handleFocus(e)}
           onBlur={handleBlur}
           maxLength={maxLength}
           textAlignVertical={multiline ? 'top' : 'center'}

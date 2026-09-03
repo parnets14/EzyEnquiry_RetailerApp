@@ -17,9 +17,12 @@ const AppHeader = ({
   onBack,
   rightComponent,
   centerTitle = true,
+  variant = 'light', // 'light' (white) | 'primary' (blue)
 }) => {
+  const isPrimary = variant === 'primary';
+  const fg = isPrimary ? Colors.white : Colors.textPrimary;
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, isPrimary && styles.containerPrimary]}>
       <View style={styles.row}>
         {/* Left */}
         <View style={styles.leftSection}>
@@ -29,7 +32,7 @@ const AppHeader = ({
               onPress={onBack}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
-              <Ionicons name="arrow-back" size={22} color={Colors.textPrimary} />
+              <Ionicons name="arrow-back" size={22} color={fg} />
             </TouchableOpacity>
           )}
         </View>
@@ -37,12 +40,12 @@ const AppHeader = ({
         {/* Title */}
         <View style={[styles.titleSection, centerTitle && styles.titleCenter]}>
           {title ? (
-            <Text style={styles.title} numberOfLines={1}>
+            <Text style={[styles.title, { color: fg }]} numberOfLines={1}>
               {title}
             </Text>
           ) : null}
           {subtitle ? (
-            <Text style={styles.subtitle} numberOfLines={1}>
+            <Text style={[styles.subtitle, isPrimary && styles.subtitlePrimary]} numberOfLines={1}>
               {subtitle}
             </Text>
           ) : null}
@@ -65,6 +68,13 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: Colors.borderLight,
+  },
+  containerPrimary: {
+    backgroundColor: Colors.secondary,
+    borderBottomColor: Colors.secondary,
+  },
+  subtitlePrimary: {
+    color: 'rgba(255,255,255,0.8)',
   },
   row: {
     flexDirection: 'row',

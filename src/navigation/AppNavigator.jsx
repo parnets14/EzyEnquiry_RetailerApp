@@ -16,6 +16,7 @@ import SplashScreen from '../screens/auth/SplashScreen';
 import LoginScreen from '../screens/auth/LoginScreen';
 import RegisterScreen from '../screens/auth/RegisterScreen';
 import OTPScreen from '../screens/auth/OTPScreen';
+import PendingApprovalScreen from '../screens/auth/PendingApprovalScreen';
 
 // Main Tab Screens
 import HomeScreen from '../screens/home/HomeScreen';
@@ -27,6 +28,7 @@ import ProfileScreen from '../screens/profile/ProfileScreen';
 // Product Screens
 import ProductDetailsScreen from '../screens/products/ProductDetailsScreen';
 import SearchResultsScreen from '../screens/products/SearchResultsScreen';
+import AddProductScreen from '../screens/products/AddProductScreen';
 
 // Enquiry Screens
 import CreateEnquiryScreen from '../screens/enquiries/CreateEnquiryScreen';
@@ -41,6 +43,14 @@ import OrderSuccessScreen from '../screens/orders/OrderSuccessScreen';
 import OrderDetailsScreen from '../screens/orders/OrderDetailsScreen';
 import OrderTrackingScreen from '../screens/orders/OrderTrackingScreen';
 import DispatchDetailsScreen from '../screens/orders/DispatchDetailsScreen';
+import DeliveryOTPScreen from '../screens/orders/DeliveryOTPScreen';
+
+// Invoice Screens
+import InvoicesScreen from '../screens/invoices/InvoicesScreen';
+import InvoiceDetailsScreen from '../screens/invoices/InvoiceDetailsScreen';
+
+// Quotation Screens
+import QuotationsScreen from '../screens/quotations/QuotationsScreen';
 
 // Notification Screen
 import NotificationsScreen from '../screens/notifications/NotificationsScreen';
@@ -138,6 +148,7 @@ const AppNavigator = React.forwardRef((props, ref) => (
       <Stack.Screen name={SCREENS.LOGIN}            component={LoginScreen} />
       <Stack.Screen name={SCREENS.REGISTER}         component={RegisterScreen} />
       <Stack.Screen name={SCREENS.OTP_VERIFY}       component={OTPScreen} />
+      <Stack.Screen name={SCREENS.PENDING_APPROVAL} component={PendingApprovalScreen} options={{ gestureEnabled: false }} />
 
       {/* Main Tabs */}
       <Stack.Screen name={SCREENS.HOME} component={MainTabs} />
@@ -151,6 +162,11 @@ const AppNavigator = React.forwardRef((props, ref) => (
       <Stack.Screen
         name={SCREENS.SEARCH_RESULTS}
         component={SearchResultsScreen}
+      />
+      <Stack.Screen
+        name={SCREENS.ADD_PRODUCT}
+        component={AddProductScreen}
+        options={{ animation: 'slide_from_bottom' }}
       />
 
       {/* Enquiries */}
@@ -174,6 +190,14 @@ const AppNavigator = React.forwardRef((props, ref) => (
       <Stack.Screen name={SCREENS.ORDER_DETAILS}   component={OrderDetailsScreen} />
       <Stack.Screen name={SCREENS.ORDER_TRACKING}  component={OrderTrackingScreen} />
       <Stack.Screen name={SCREENS.DISPATCH_DETAILS} component={DispatchDetailsScreen} />
+      <Stack.Screen name={SCREENS.DELIVERY_OTP}    component={DeliveryOTPScreen} />
+
+      {/* Invoices & Payments */}
+      <Stack.Screen name={SCREENS.INVOICES}         component={InvoicesScreen} />
+      <Stack.Screen name={SCREENS.INVOICE_DETAILS}  component={InvoiceDetailsScreen} />
+
+      {/* Quotations */}
+      <Stack.Screen name={SCREENS.QUOTATIONS}       component={QuotationsScreen} />
 
       {/* Notifications */}
       <Stack.Screen name={SCREENS.NOTIFICATIONS}   component={NotificationsScreen} />

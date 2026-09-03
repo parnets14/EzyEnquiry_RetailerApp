@@ -8,24 +8,35 @@ import StatusBadge from '../common/StatusBadge';
 import { formatDate, formatCurrency } from '../../utils/formatters';
 
 // Statuses where tracking makes sense
-const TRACKABLE = ['Accepted', 'Processing', 'Ready', 'Dispatched', 'Delivered'];
+const TRACKABLE = ['Accepted', 'Processing', 'ReadyForDispatch', 'Dispatched', 'InTransit', 'Delivered'];
 
 const OrderCard = ({ order, onPress, onTrack }) => {
   const {
     id,
+    orderCode,
     productName,
     productCode,
     quantity,
+    dispatchedQty,
     unit,
     total,
     status,
     orderDate,
+    createdAt,
     paymentStatus,
     expectedDelivery,
   } = order;
 
-  const canTrack = TRACKABLE.includes(status);
-  const isDispatched = status === 'Dispatched';
+  const canTrack = ['Dispatched', 'InTransit', 'Delivered'].includes(status) || TRACKABLE.includes(status);
+  const isDispatched = status === 'Dispatched' || status === 'InTransit';
+  const displayCode = orderCode || id;
+  const displayDate = orderDate || createdAt;
+
+  // Partial dispatch: show remaining when some (but not all) has shipped
+  const dispatched = Number(dispatchedQty || 0);
+  const ordered = Number(quantity || 0);
+  const remaining = Math.max(ordered - dispatched, 0);
+  const showPartial = dispatched > 0 && remaining > 0;
 
   // Accent colour on the left border tracks order urgency
   const accentColor =
@@ -38,7 +49,7 @@ const OrderCard = ({ order, onPress, onTrack }) => {
     <View style={[styles.card, { borderLeftColor: accentColor }]}>
       {/* Header row */}
       <View style={styles.header}>
-        <Text style={styles.id}>{id}</Text>
+        <Text style={styles.id}>{displayCode}</Text>
         <StatusBadge status={status} type="order" />
       </View>
 
@@ -47,10 +58,21 @@ const OrderCard = ({ order, onPress, onTrack }) => {
 
       {/* Info chips */}
       <View style={styles.infoRow}>
-        <InfoChip icon="cube-outline"     label="Qty"   value={`${quantity} ${unit}`} />
+        <InfoChip icon="cube-outline"     label="Qty"   value={`${ordered} ${unit}`} />
         <InfoChip icon="cash-outline"     label="Total" value={formatCurrency(total)} valueColor={Colors.primary} />
-        <InfoChip icon="calendar-outline" label="Date"  value={formatDate(orderDate)} />
+        <InfoChip icon="calendar-outline" label="Date"  value={formatDate(displayDate)} />
       </View>
+
+      {/* Partial dispatch summary */}
+      {showPartial && (
+        <View style={styles.partialRow}>
+          <Ionicons name="git-branch-outline" size={13} color={Colors.warning} />
+          <Text style={styles.partialText}>
+            Dispatched <Text style={styles.partialStrong}>{dispatched}</Text> · Remaining{' '}
+            <Text style={styles.partialStrong}>{remaining}</Text> {unit}
+          </Text>
+        </View>
+      )}
 
       {/* Expected delivery if not yet delivered */}
       {expectedDelivery && status !== 'Delivered' && (
@@ -98,7 +120,7 @@ const OrderCard = ({ order, onPress, onTrack }) => {
               color={isDispatched ? Colors.white : Colors.primary}
             />
             <Text style={[styles.trackBtnText, isDispatched && styles.trackBtnTextActive]}>
-              {isDispatched ? 'Track' : 'Timeline'}
+              Track
             </Text>
           </TouchableOpacity>
         )}
@@ -178,6 +200,25 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'center',
     fontSize: 11,
+  },
+  partialRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginBottom: 6,
+    backgroundColor: Colors.warningBg,
+    borderRadius: BorderRadius.sm,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  partialText: {
+    ...Typography.caption,
+    color: Colors.warningText,
+    flex: 1,
+  },
+  partialStrong: {
+    fontWeight: '800',
+    color: Colors.warningText,
   },
   expectedRow: {
     flexDirection: 'row',

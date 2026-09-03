@@ -41,7 +41,12 @@ export default function SplashScreen({ navigation }) {
   useEffect(() => {
     if (loading) return;
     const timer = setTimeout(() => {
-      navigation.replace(user ? SCREENS.HOME : SCREENS.LOGIN);
+      if (!user) {
+        navigation.replace(SCREENS.LOGIN);
+        return;
+      }
+      const approved = user.is_approved || user.company?.status === 'Approved' || user.company_status === 'Approved';
+      navigation.replace(approved ? SCREENS.HOME : SCREENS.PENDING_APPROVAL);
     }, 1200);
     return () => clearTimeout(timer);
   }, [loading, user, navigation]);

@@ -66,7 +66,9 @@ const OTPScreen = ({ navigation, route }) => {
       await session.save(data?.token, data?.user);
       setUser(data?.user || null);
       setLoading(false);
-      navigation.replace(SCREENS.HOME);
+      const u = data?.user;
+      const approved = u?.is_approved || u?.company?.status === 'Approved' || u?.company_status === 'Approved';
+      navigation.replace(approved ? SCREENS.HOME : SCREENS.PENDING_APPROVAL);
     } catch (err) {
       setLoading(false);
       setError(err.message || 'Invalid OTP. Please try again.');

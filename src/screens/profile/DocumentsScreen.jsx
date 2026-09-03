@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, StatusBar,
   ActivityIndicator, Alert, PermissionsAndroid, Platform, Linking,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
@@ -20,7 +21,7 @@ import { authApi } from '../../utils/api';
  *  trade → docs_biz
  */
 const DOC_TYPES = [
-  { key: 'gst',   field: 'gst',   label: 'GST Certificate',       icon: 'receipt-outline',  required: true,  color: '#2980B9', bg: '#EBF5FB' },
+  { key: 'gst',   field: 'gst',   label: 'GST Certificate',       icon: 'receipt-outline',  required: false, color: '#2980B9', bg: '#EBF5FB' },
   { key: 'pan',   field: 'pan',   label: 'PAN Card',              icon: 'card-outline',     required: true,  color: '#8E44AD', bg: '#F5EEF8' },
   { key: 'reg',   field: 'reg',   label: 'Address Proof',         icon: 'home-outline',     required: true,  color: '#E67E22', bg: '#FDF2E9' },
   { key: 'trade', field: 'trade', label: 'Business Registration', icon: 'business-outline', required: false, color: '#27AE60', bg: '#E8F8EF' },
@@ -32,7 +33,7 @@ const SUBMITTED_KEY = { gst: 'gst', pan: 'pan', reg: 'address', trade: 'biz' };
 export default function DocumentsScreen({ navigation }) {
   const { user, refresh } = useAuth();
   const isApproved = user?.company_status === 'Approved' || user?.is_approved;
-  const kycDocs  = user?.kyc_documents || [];
+  const kycDocs = user?.kyc_documents || [];
   const [submitted, setSubmitted] = useState(() => {
     // Build submitted map from backend kyc_documents array
     const map = {};
@@ -45,24 +46,40 @@ export default function DocumentsScreen({ navigation }) {
   });
   const [uploadingKey, setUploadingKey] = useState(null);
 
+  useFocusEffect(useCallback(() => {
+    refresh();
+  }, [refresh]));
+
+  const documentOf = (docKey) => kycDocs.find(
+    document => document.document_type === docKey
+      || (docKey === 'reg' && document.document_type === 'registration'),
+  );
+
   const statusOf = (docKey) => {
-    // Prefer per-document state from backend kyc_documents
-    const backendDoc = kycDocs.find(d => d.document_type === docKey || (docKey === 'reg' && d.document_type === 'registration'));
-    if (backendDoc) {
-      if (backendDoc.status === 'Verified') return 'verified';
-      if (backendDoc.status === 'Pending' || backendDoc.submitted) return 'pending';
-      if (backendDoc.status === 'Rejected') return 'rejected';
-    }
-    // Fallback to local submitted tracking
+    const backendDoc = documentOf(docKey);
+    if (backendDoc?.status === 'Approved') return 'approved';
+    if (backendDoc?.status === 'Rejected') return 'rejected';
+    if (backendDoc?.status === 'Pending') return 'pending';
+    if (backendDoc?.submitted) return 'pending';
+
+    // Fallback for older accounts that only have legacy submitted flags.
     const flag = submitted[SUBMITTED_KEY[docKey]];
     if (!flag) return 'none';
-    return isApproved ? 'verified' : 'pending';
+    return isApproved ? 'approved' : 'pending';
   };
 
   const uploadedCount = DOC_TYPES.filter(d => statusOf(d.key) !== 'none').length;
-  const verifiedCount = DOC_TYPES.filter(d => statusOf(d.key) === 'verified').length;
-  const pendingCount  = DOC_TYPES.filter(d => statusOf(d.key) === 'pending').length;
-  const notUploaded   = DOC_TYPES.length - uploadedCount;
+  const approvedCount = DOC_TYPES.filter(d => statusOf(d.key) === 'approved').length;
+  const pendingCount = DOC_TYPES.filter(d => statusOf(d.key) === 'pending').length;
+  const rejectedCount = DOC_TYPES.filter(d => statusOf(d.key) === 'rejected').length;
+  const notUploaded = DOC_TYPES.length - uploadedCount;
+  const overallStatus = rejectedCount > 0
+    ? { text: 'Action Required', icon: 'alert-circle', color: '#DC2626', style: st.chipRejected }
+    : pendingCount > 0
+      ? { text: 'Under Review', icon: 'time-outline', color: '#F39C12', style: st.chipPending }
+      : notUploaded > 0
+        ? { text: 'Documents Needed', icon: 'document-outline', color: '#6B7280', style: st.chipMissing }
+        : { text: 'Approved', icon: 'shield-checkmark', color: '#27AE60', style: st.chipApproved };
 
   // file: { uri, type, name }
   const doUpload = async (doc, file) => {
@@ -190,14 +207,14 @@ export default function DocumentsScreen({ navigation }) {
               <Text style={st.progressTitle}>Verification Progress</Text>
               <Text style={st.progressSub}>{uploadedCount} of {DOC_TYPES.length} documents uploaded</Text>
             </View>
-            <View style={[st.statusChip, isApproved ? st.chipApproved : st.chipPending]}>
+            <View style={[st.statusChip, overallStatus.style]}>
               <Ionicons
-                name={isApproved ? 'shield-checkmark' : 'time-outline'}
+                name={overallStatus.icon}
                 size={13}
-                color={isApproved ? '#27AE60' : '#F39C12'}
+                color={overallStatus.color}
               />
-              <Text style={[st.statusChipText, { color: isApproved ? '#27AE60' : '#F39C12' }]}>
-                {isApproved ? 'Verified' : 'Under Review'}
+              <Text style={[st.statusChipText, { color: overallStatus.color }]}>
+                {overallStatus.text}
               </Text>
             </View>
           </View>
@@ -207,9 +224,10 @@ export default function DocumentsScreen({ navigation }) {
           </View>
 
           <View style={st.miniStatsRow}>
-            <MiniStat num={verifiedCount} label="Verified" color="#27AE60" />
-            <MiniStat num={pendingCount}  label="Pending"  color="#F39C12" />
-            <MiniStat num={notUploaded}   label="Missing"  color={Colors.textTertiary} />
+            <MiniStat num={approvedCount} label="Approved" color="#27AE60" />
+            <MiniStat num={pendingCount} label="Pending" color="#F39C12" />
+            <MiniStat num={rejectedCount} label="Rejected" color="#DC2626" />
+            <MiniStat num={notUploaded} label="Missing" color={Colors.textTertiary} />
           </View>
         </View>
 
@@ -222,6 +240,7 @@ export default function DocumentsScreen({ navigation }) {
         {/* ── Document cards ── */}
         {DOC_TYPES.map(doc => {
           const status = statusOf(doc.key);
+          const backendDoc = documentOf(doc.key);
           const isUploading = uploadingKey === doc.key;
 
           return (
@@ -236,7 +255,7 @@ export default function DocumentsScreen({ navigation }) {
                   {doc.required && <View style={st.reqDot}><Text style={st.reqDotText}>Required</Text></View>}
                 </View>
 
-                <StatusLine status={status} />
+                <StatusLine status={status} rejectReason={backendDoc?.reject_reason} />
               </View>
 
               {/* Action */}
@@ -283,17 +302,23 @@ const MiniStat = ({ num, label, color }) => (
   </View>
 );
 
-const StatusLine = ({ status }) => {
+const StatusLine = ({ status, rejectReason }) => {
   const map = {
-    verified: { icon: 'checkmark-circle', color: '#27AE60', text: 'Verified' },
-    pending:  { icon: 'time',             color: '#F39C12', text: 'Uploaded · Pending review' },
-    none:     { icon: 'ellipse-outline',  color: Colors.textTertiary, text: 'Not uploaded yet' },
+    approved: { icon: 'checkmark-circle', color: '#27AE60', text: 'Approved' },
+    pending:  { icon: 'time', color: '#F39C12', text: 'Uploaded · Pending review' },
+    rejected: { icon: 'alert-circle', color: '#DC2626', text: 'Rejected · Replace document' },
+    none:     { icon: 'ellipse-outline', color: Colors.textTertiary, text: 'Not uploaded yet' },
   };
-  const s = map[status];
+  const item = map[status] || map.none;
   return (
-    <View style={st.statusLine}>
-      <Ionicons name={s.icon} size={13} color={s.color} />
-      <Text style={[st.statusLineText, { color: s.color }]}>{s.text}</Text>
+    <View>
+      <View style={st.statusLine}>
+        <Ionicons name={item.icon} size={13} color={item.color} />
+        <Text style={[st.statusLineText, { color: item.color }]}>{item.text}</Text>
+      </View>
+      {status === 'rejected' && rejectReason ? (
+        <Text style={st.rejectReason} numberOfLines={2}>{rejectReason}</Text>
+      ) : null}
     </View>
   );
 };
@@ -313,6 +338,8 @@ const st = StyleSheet.create({
   statusChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20 },
   chipApproved: { backgroundColor: '#E8F8EF' },
   chipPending: { backgroundColor: '#FEF9E7' },
+  chipRejected: { backgroundColor: '#FEF2F2' },
+  chipMissing: { backgroundColor: '#F3F4F6' },
   statusChipText: { fontSize: 11, fontWeight: '700' },
 
   progressBarTrack: { height: 8, backgroundColor: '#EEF0F4', borderRadius: 4, overflow: 'hidden', marginBottom: 16 },
@@ -342,6 +369,7 @@ const st = StyleSheet.create({
 
   statusLine: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   statusLineText: { fontSize: 11, fontWeight: '600' },
+  rejectReason: { marginTop: 3, fontSize: 10, lineHeight: 14, color: '#B91C1C' },
 
   uploadBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 5,

@@ -39,19 +39,22 @@ export default function DispatchDetailsScreen({ navigation, route }) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
-        <AppHeader title="Dispatch Details" showBack onBack={() => navigation.goBack()} centerTitle />
+        <AppHeader title="Dispatch Details" showBack onBack={() => navigation.goBack()} centerTitle variant="primary" />
         <View style={styles.center}><ActivityIndicator color={Colors.primary} /></View>
       </SafeAreaView>
     );
   }
 
-  const dispatch = tracking?.dispatch;
+  const dispatches = (tracking?.dispatches && tracking.dispatches.length)
+    ? tracking.dispatches
+    : (tracking?.dispatch ? [tracking.dispatch] : []);
   const status   = tracking?.status || '';
+  const unit     = tracking?.unit || '';
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
-      <AppHeader title="Dispatch Details" showBack onBack={() => navigation.goBack()} centerTitle />
+      <AppHeader title="Dispatch Details" showBack onBack={() => navigation.goBack()} centerTitle variant="primary" />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         {/* Order Banner */}
@@ -62,41 +65,40 @@ export default function DispatchDetailsScreen({ navigation, route }) {
           <StatusBadge status={status} type="order" size="md" />
         </View>
 
-        {/* Status */}
-        <View style={styles.statusCard}>
-          <View style={styles.statusIconWrap}>
-            <Ionicons name={status === 'Delivered' ? 'checkmark-circle' : 'car'} size={32} color={status === 'Delivered' ? Colors.success : Colors.primary} />
+        {/* Quantity summary */}
+        {tracking?.ordered_qty != null && (
+          <View style={styles.qtyCard}>
+            <QtyStat label="Ordered" value={`${tracking.ordered_qty}`} unit={unit} color={Colors.secondary} />
+            <View style={styles.qtyDivider} />
+            <QtyStat label="Dispatched" value={`${tracking.dispatched_qty || 0}`} unit={unit} color={Colors.primary} />
+            <View style={styles.qtyDivider} />
+            <QtyStat label="Remaining" value={`${tracking.remaining_qty || 0}`} unit={unit} color={(tracking.remaining_qty || 0) > 0 ? Colors.warning : Colors.success} />
           </View>
-          <View style={styles.statusInfo}>
-            <Text style={styles.statusTitle}>{status === 'Delivered' ? 'Order Delivered' : dispatch ? 'In Transit' : 'Awaiting Dispatch'}</Text>
-            {dispatch?.expected_delivery && status !== 'Delivered' && (
-              <View style={styles.expectedRow}>
-                <Ionicons name="calendar-outline" size={14} color={Colors.textSecondary} />
-                <Text style={styles.expectedText}> Expected by <Text style={styles.expectedDate}>{formatDate(dispatch.expected_delivery)}</Text></Text>
-              </View>
-            )}
-            {status === 'Delivered' && (
-              <View style={styles.deliveredRow}>
-                <Ionicons name="checkmark-circle" size={14} color={Colors.success} />
-                <Text style={styles.deliveredText}> Delivered successfully</Text>
-              </View>
-            )}
-          </View>
-        </View>
+        )}
 
-        {/* Shipment Details */}
-        {dispatch ? (
-          <View style={styles.card}>
-            <View style={styles.cardHeader}>
-              <View style={styles.cardBar} />
-              <Text style={styles.cardTitle}>Shipment Details</Text>
+        {/* Shipment Details — one card per dispatch batch */}
+        {dispatches.length > 0 ? (
+          dispatches.map((dispatch, i) => (
+            <View style={styles.card} key={dispatch.id || dispatch.dispatch_code || i}>
+              <View style={styles.cardHeader}>
+                <View style={styles.cardBar} />
+                <Text style={styles.cardTitle}>
+                  {dispatches.length > 1 ? `Shipment ${i + 1}` : 'Shipment Details'}
+                  {dispatch.dispatch_code ? `  ·  ${dispatch.dispatch_code}` : ''}
+                </Text>
+                <View style={{ flex: 1 }} />
+                <StatusBadge status={dispatch.status || 'Dispatched'} type="order" />
+              </View>
+              {dispatch.qty ? <DispatchRow icon="cube-outline" label="Quantity" value={`${dispatch.qty} ${dispatch.unit || unit}`} /> : null}
+              {dispatch.vehicle_number ? <DispatchRow icon="car-outline" label="Vehicle Number" value={dispatch.vehicle_number} /> : null}
+              {dispatch.transport_name ? <DispatchRow icon="business-outline" label="Transporter" value={dispatch.transport_name} /> : null}
+              {dispatch.driver_name ? <DispatchRow icon="person-outline" label="Driver" value={dispatch.driver_name} /> : null}
+              {dispatch.lr_number ? <DispatchRow icon="document-outline" label="LR Number" value={dispatch.lr_number} /> : null}
+              {dispatch.invoice_number ? <DispatchRow icon="receipt-outline" label="Invoice" value={dispatch.invoice_number} /> : null}
+              {dispatch.dispatch_date ? <DispatchRow icon="calendar-outline" label="Dispatch Date" value={formatDate(dispatch.dispatch_date)} /> : null}
+              {dispatch.expected_delivery ? <DispatchRow icon="flag-outline" label="Expected Delivery" value={formatDate(dispatch.expected_delivery)} isLast /> : null}
             </View>
-            {dispatch.vehicle_number ? <DispatchRow icon="car-outline" label="Vehicle Number" value={dispatch.vehicle_number} /> : null}
-            {dispatch.transport_name ? <DispatchRow icon="business-outline" label="Transporter" value={dispatch.transport_name} /> : null}
-            {dispatch.lr_number ? <DispatchRow icon="document-outline" label="LR Number" value={dispatch.lr_number} /> : null}
-            {dispatch.dispatch_date ? <DispatchRow icon="calendar-outline" label="Dispatch Date" value={formatDate(dispatch.dispatch_date)} /> : null}
-            {dispatch.expected_delivery ? <DispatchRow icon="flag-outline" label="Expected Delivery" value={formatDate(dispatch.expected_delivery)} isLast /> : null}
-          </View>
+          ))
         ) : (
           <View style={styles.noDispatch}>
             <Ionicons name="time-outline" size={44} color={Colors.border} />
@@ -137,6 +139,14 @@ const DispatchRow = ({ icon, label, value, isLast }) => (
   </View>
 );
 
+const QtyStat = ({ label, value, unit, color }) => (
+  <View style={styles.qtyStat}>
+    <Text style={[styles.qtyValue, { color }]}>{value}</Text>
+    <Text style={styles.qtyUnit}>{unit}</Text>
+    <Text style={styles.qtyLabel}>{label}</Text>
+  </View>
+);
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
   scroll: { padding: Spacing.screenPadding, paddingBottom: 40, gap: 12 },
@@ -144,6 +154,12 @@ const styles = StyleSheet.create({
   orderBanner: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: Colors.white, borderRadius: BorderRadius.xl, padding: Spacing.base, ...Shadows.sm, borderLeftWidth: 3, borderLeftColor: Colors.primary },
   bannerLeft: { flex: 1 },
   orderId: { ...Typography.h5, color: Colors.textPrimary },
+  qtyCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.white, borderRadius: BorderRadius.xl, padding: Spacing.base, ...Shadows.sm },
+  qtyStat: { flex: 1, alignItems: 'center' },
+  qtyValue: { ...Typography.h3, fontWeight: '800' },
+  qtyUnit: { ...Typography.caption, color: Colors.textTertiary, fontSize: 10 },
+  qtyLabel: { ...Typography.caption, color: Colors.textSecondary, marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.4, fontSize: 10 },
+  qtyDivider: { width: 1, height: 40, backgroundColor: Colors.borderLight },
   statusCard: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: Colors.primaryBg, borderRadius: BorderRadius.xl, padding: Spacing.base, ...Shadows.sm, borderWidth: 1, borderColor: Colors.primary + '30' },
   statusIconWrap: { width: 60, height: 60, borderRadius: 30, backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center', ...Shadows.sm },
   statusInfo: { flex: 1 },

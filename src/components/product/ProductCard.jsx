@@ -11,7 +11,7 @@ import { formatCurrency } from '../../utils/formatters';
  * Any empty field is hidden so nothing fake/placeholder is shown.
  * `compact` renders a tidy grid tile (2 per row); default is full-width.
  */
-const ProductCard = ({ product, onPress, style, compact = false }) => {
+const ProductCard = ({ product, onPress, onMenuPress, style, compact = false }) => {
   const {
     name, productCode, brand, category, size, finish, tileType, grade,
     material, color, thickness, application, unit, gstPercent,
@@ -31,7 +31,7 @@ const ProductCard = ({ product, onPress, style, compact = false }) => {
   const priceLabel = retailPrice ? 'Retail' : 'MRP';
 
   return (
-    <TouchableOpacity style={[styles.card, style]} onPress={onPress} activeOpacity={0.9}>
+    <TouchableOpacity style={[styles.card, compact && styles.cardCompact, style]} onPress={onPress} activeOpacity={0.9}>
       {/* Image */}
       <View style={[styles.imageContainer, compact && styles.imageContainerCompact]}>
         {imageUri ? (
@@ -42,6 +42,20 @@ const ProductCard = ({ product, onPress, style, compact = false }) => {
             <Text style={styles.placeholderText}>No Image</Text>
           </View>
         )}
+        {onMenuPress ? (
+          <TouchableOpacity
+            style={styles.menuBtn}
+            onPress={event => {
+              event.stopPropagation?.();
+              onMenuPress(product);
+            }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel={`Manage ${name}`}
+          >
+            <Ionicons name="ellipsis-vertical" size={20} color={Colors.textPrimary} />
+          </TouchableOpacity>
+        ) : null}
         {images && images.length > 1 && (
           <View style={styles.imageCount}>
             <Ionicons name="images-outline" size={11} color={Colors.white} />
@@ -52,37 +66,40 @@ const ProductCard = ({ product, onPress, style, compact = false }) => {
 
       {/* Content */}
       <View style={[styles.content, compact && styles.contentCompact]}>
-        {category ? <Text style={styles.category} numberOfLines={1}>{category}</Text> : null}
+        {/* Top block grows to fill available space */}
+        <View style={compact && styles.topBlock}>
+          {category ? <Text style={styles.category} numberOfLines={1}>{category}</Text> : null}
 
-        <Text style={[styles.name, compact && styles.nameCompact]} numberOfLines={2}>{name}</Text>
-        {productCode ? <Text style={styles.code} numberOfLines={1}>{productCode}</Text> : null}
+          <Text style={[styles.name, compact && styles.nameCompact]} numberOfLines={2}>{name}</Text>
+          {productCode ? <Text style={styles.code} numberOfLines={1}>{productCode}</Text> : null}
 
-        {/* Brand */}
-        {brand ? (
-          <View style={styles.brandRow}>
-            <Ionicons name="business-outline" size={12} color={Colors.textTertiary} />
-            <Text style={styles.brandText} numberOfLines={1}>{brand}</Text>
-          </View>
-        ) : null}
+          {/* Brand */}
+          {brand ? (
+            <View style={styles.brandRow}>
+              <Ionicons name="business-outline" size={12} color={Colors.textTertiary} />
+              <Text style={styles.brandText} numberOfLines={1}>{brand}</Text>
+            </View>
+          ) : null}
 
-        {/* Spec chips */}
-        {chips.length > 0 && (
-          <View style={styles.specRow}>
-            {chips.map((c, i) => (
-              <View key={`${c}-${i}`} style={styles.specTag}>
-                <Text style={styles.specTagText} numberOfLines={1}>{c}</Text>
-              </View>
-            ))}
-          </View>
-        )}
+          {/* Spec chips */}
+          {chips.length > 0 && (
+            <View style={[styles.specRow, compact && styles.specRowCompact]}>
+              {chips.map((c, i) => (
+                <View key={`${c}-${i}`} style={styles.specTag}>
+                  <Text style={styles.specTagText} numberOfLines={1}>{c}</Text>
+                </View>
+              ))}
+            </View>
+          )}
 
-        {/* Packing (full-width mode only) */}
-        {!compact && packing.length > 0 && (
-          <View style={styles.packingRow}>
-            <Ionicons name="cube-outline" size={12} color={Colors.textTertiary} />
-            <Text style={styles.packingText}>{packing.join('  ·  ')}</Text>
-          </View>
-        )}
+          {/* Packing (full-width mode only) */}
+          {!compact && packing.length > 0 && (
+            <View style={styles.packingRow}>
+              <Ionicons name="cube-outline" size={12} color={Colors.textTertiary} />
+              <Text style={styles.packingText}>{packing.join('  ·  ')}</Text>
+            </View>
+          )}
+        </View>
 
         {/* Divider */}
         <View style={styles.divider} />
@@ -112,10 +129,7 @@ const ProductCard = ({ product, onPress, style, compact = false }) => {
           </Text>
         ) : null}
 
-        {/* Dealer price (full-width mode only) */}
-        {!compact && dealerPrice ? (
-          <Text style={styles.dealerText}>Dealer: {formatCurrency(dealerPrice)}</Text>
-        ) : null}
+
       </View>
     </TouchableOpacity>
   );
@@ -128,12 +142,18 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     ...Shadows.sm,
   },
+  cardCompact: { flex: 1 },
 
   imageContainer: { position: 'relative', height: 160, backgroundColor: Colors.background },
   imageContainerCompact: { height: 130 },
   image: { width: '100%', height: '100%' },
   imagePlaceholder: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.borderLight, gap: 4 },
   placeholderText: { ...Typography.caption, color: Colors.textTertiary },
+  menuBtn: {
+    position: 'absolute', top: 8, right: 8, width: 34, height: 34,
+    borderRadius: 17, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.94)', ...Shadows.sm,
+  },
 
   imageCount: {
     position: 'absolute', bottom: 8, right: 10,
@@ -144,7 +164,8 @@ const styles = StyleSheet.create({
   imageCountText: { color: Colors.white, fontSize: 10, fontWeight: '600' },
 
   content: { padding: Spacing.base },
-  contentCompact: { padding: 10 },
+  contentCompact: { padding: 10, flex: 1 },
+  topBlock: { flex: 1 },
 
   category: {
     ...Typography.caption, color: Colors.primary, fontWeight: '700', fontSize: 10,
@@ -158,6 +179,7 @@ const styles = StyleSheet.create({
   brandText: { ...Typography.caption, color: Colors.textSecondary, fontSize: 11, flex: 1 },
 
   specRow: { flexDirection: 'row', gap: 5, flexWrap: 'wrap', marginBottom: 6 },
+  specRowCompact: { flexWrap: 'nowrap', overflow: 'hidden' },
   specTag: { backgroundColor: Colors.secondaryBg, borderRadius: BorderRadius.xs, paddingHorizontal: 7, paddingVertical: 2 },
   specTagText: { ...Typography.caption, color: Colors.secondary, fontSize: 10, fontWeight: '500' },
 

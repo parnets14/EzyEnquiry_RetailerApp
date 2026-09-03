@@ -49,6 +49,20 @@ export default function NotificationsScreen({ navigation }) {
     } catch { /* silent */ }
   };
 
+  const handleDelete = async (notif) => {
+    // Optimistic removal, restore on failure.
+    const prevList = notifications;
+    const wasUnread = !notif.is_read;
+    setNotifications(prev => prev.filter(n => n._id !== notif._id));
+    if (wasUnread) setUnreadCount(prev => Math.max(prev - 1, 0));
+    try {
+      await notificationApi.remove(notif._id);
+    } catch {
+      setNotifications(prevList);
+      if (wasUnread) setUnreadCount(prev => prev + 1);
+    }
+  };
+
   const handlePress = async (notif) => {
     if (!notif.is_read) {
       try {
@@ -78,6 +92,7 @@ export default function NotificationsScreen({ navigation }) {
         : n.type?.includes('dispatch') || n.type?.includes('delivery') ? 'delivery'
         : 'system',
     timestamp: n.created_at,
+    createdAt: n.created_at,
   });
 
   return (
@@ -123,7 +138,7 @@ export default function NotificationsScreen({ navigation }) {
           contentContainerStyle={styles.list}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.primary]} />}
           renderItem={({ item }) => (
-            <NotificationCard notification={item} onPress={() => handlePress(item)} />
+            <NotificationCard notification={item} onPress={() => handlePress(item)} onDelete={() => handleDelete(item)} />
           )}
           ListFooterComponent={<View style={{ height: 90 }} />}
         />

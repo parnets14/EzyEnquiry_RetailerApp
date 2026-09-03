@@ -59,7 +59,7 @@ export default function HomeScreen({ navigation }) {
 
   return (
     <SafeAreaView style={st.safe} edges={['top']}>
-      <StatusBar barStyle="light-content" backgroundColor={Colors.secondary} />
+      <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
 
       {/* ═══ HEADER ═══ */}
       <View style={st.header}>
@@ -89,20 +89,20 @@ export default function HomeScreen({ navigation }) {
 
         {/* Stats card */}
         <View style={st.statsCard}>
-          <View style={st.statItem}>
+          <TouchableOpacity style={st.statItem} activeOpacity={0.8} onPress={() => navigation.navigate(SCREENS.ENQUIRIES)}>
             <Text style={st.statNum}>{counts.enquiries ?? '—'}</Text>
-            <Text style={st.statLbl}>ENQUIRIES{'\n'}TOTAL</Text>
-          </View>
+            <Text style={st.statLbl}>ENQUIRIES</Text>
+          </TouchableOpacity>
           <View style={st.statDiv} />
-          <View style={st.statItem}>
+          <TouchableOpacity style={st.statItem} activeOpacity={0.8} onPress={() => navigation.navigate(SCREENS.ORDERS)}>
             <Text style={st.statNum}>{counts.orders ?? '—'}</Text>
-            <Text style={st.statLbl}>ORDERS{'\n'}TOTAL</Text>
-          </View>
+            <Text style={st.statLbl}>ORDERS</Text>
+          </TouchableOpacity>
           <View style={st.statDiv} />
-          <View style={st.statItem}>
-            <Text style={st.statNum}>{unread}</Text>
-            <Text style={st.statLbl}>UNREAD{'\n'}ALERTS</Text>
-          </View>
+          <TouchableOpacity style={st.statItem} activeOpacity={0.8} onPress={() => navigation.navigate(SCREENS.INVOICES)}>
+            <Text style={st.statNum}>{counts.invoices ?? '—'}</Text>
+            <Text style={st.statLbl}>INVOICES</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -139,13 +139,22 @@ export default function HomeScreen({ navigation }) {
           </View>
         ) : (
           <>
+            {/* ─── Overview grid ─── */}
+            <Text style={st.secTitle}>Overview</Text>
+            <View style={st.overviewGrid}>
+              <OverviewCard icon="hourglass-outline" label="In Progress" value={counts.in_progress ?? 0} color="#E67E22" bg="#FDF0E4" onPress={() => navigation.navigate(SCREENS.ORDERS)} />
+              <OverviewCard icon="checkmark-done-outline" label="Delivered" value={counts.delivered ?? 0} color="#27AE60" bg="#E8F8EF" onPress={() => navigation.navigate(SCREENS.ORDERS)} />
+              <OverviewCard icon="card-outline" label="Pending Pay" value={counts.pending_payments ?? 0} sub={counts.pending_amount ? formatCurrency(counts.pending_amount) : ''} color="#C0392B" bg="#FDEDEC" onPress={() => navigation.navigate(SCREENS.INVOICES)} />
+              <OverviewCard icon="notifications-outline" label="Alerts" value={unread} color="#2980B9" bg="#EBF5FB" onPress={() => navigation.navigate(SCREENS.NOTIFICATIONS)} />
+            </View>
+
             {/* ─── Quick Actions ─── */}
             <Text style={st.secTitle}>Quick Actions</Text>
             <View style={st.quickRow}>
-              <QA icon="search"         label="Search"    color="#2980B9" bg="#EBF5FB" onPress={() => navigation.navigate(SCREENS.SEARCH)} />
-              <QA icon="create"         label="Enquiry"   color={Colors.primary} bg="#FFF3EE" onPress={() => navigation.navigate(SCREENS.SEARCH)} />
-              <QA icon="document-text"  label="Enquiries" color="#8E44AD" bg="#F5EEF8" onPress={() => navigation.navigate(SCREENS.ENQUIRIES)} />
-              <QA icon="cube"           label="Orders"    color="#27AE60" bg="#E8F8EF" onPress={() => navigation.navigate(SCREENS.ORDERS)} />
+              <QA icon="search"         label="Search"     color="#2980B9" bg="#EBF5FB" onPress={() => navigation.navigate(SCREENS.SEARCH)} />
+              <QA icon="document-text"  label="Quotations" color="#8E44AD" bg="#F5EEF8" onPress={() => navigation.navigate(SCREENS.QUOTATIONS)} />
+              <QA icon="cube"           label="Orders"     color="#27AE60" bg="#E8F8EF" onPress={() => navigation.navigate(SCREENS.ORDERS)} />
+              <QA icon="receipt"        label="Invoices"   color={Colors.primary} bg="#FFF3EE" onPress={() => navigation.navigate(SCREENS.INVOICES)} />
             </View>
 
             {/* ─── Recent Orders ─── */}
@@ -208,6 +217,17 @@ const QA = ({ icon, label, color, bg, onPress }) => (
   </TouchableOpacity>
 );
 
+const OverviewCard = ({ icon, label, value, sub, color, bg, onPress }) => (
+  <TouchableOpacity style={st.ovCard} activeOpacity={0.85} onPress={onPress}>
+    <View style={[st.ovIcon, { backgroundColor: bg }]}><Ionicons name={icon} size={18} color={color} /></View>
+    <View style={{ flex: 1 }}>
+      <Text style={st.ovValue}>{value}</Text>
+      <Text style={st.ovLabel}>{label}</Text>
+      {sub ? <Text style={[st.ovSub, { color }]} numberOfLines={1}>{sub}</Text> : null}
+    </View>
+  </TouchableOpacity>
+);
+
 const st = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#F2F4F7' },
   header: { backgroundColor: Colors.secondary, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24, overflow: 'visible', zIndex: 10 },
@@ -244,6 +264,13 @@ const st = StyleSheet.create({
   secTitle: { fontSize: 13, fontWeight: '700', color: Colors.textPrimary, paddingHorizontal: 16, marginTop: 16, marginBottom: 8 },
   secRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, marginTop: 16, marginBottom: 8 },
   viewAll: { fontSize: 13, fontWeight: '600', color: Colors.primary },
+
+  overviewGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 16, gap: 10 },
+  ovCard: { width: '47.5%', flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#FFF', borderRadius: 12, padding: 12, ...Shadows.sm },
+  ovIcon: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  ovValue: { fontSize: 18, fontWeight: '800', color: Colors.textPrimary, lineHeight: 22 },
+  ovLabel: { fontSize: 10, fontWeight: '600', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.3 },
+  ovSub: { fontSize: 10, fontWeight: '700', marginTop: 1 },
 
   quickRow: { flexDirection: 'row', paddingHorizontal: 16, gap: 8 },
   qaBtn: { flex: 1, alignItems: 'center', gap: 6, backgroundColor: '#FFF', borderRadius: 12, paddingVertical: 10, ...Shadows.sm },

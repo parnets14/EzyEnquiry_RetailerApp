@@ -1,8 +1,9 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  StatusBar, RefreshControl, ActivityIndicator,
+  StatusBar, RefreshControl, ActivityIndicator, TextInput,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { Colors } from '../../theme/colors';
@@ -13,7 +14,13 @@ import EmptyState from '../../components/common/EmptyState';
 import { enquiryApi, notificationApi } from '../../utils/api';
 import { SCREENS } from '../../constants';
 
-const TABS = ['All', 'New', 'Viewed', 'Replied', 'Negotiation', 'Confirmed', 'Cancelled'];
+const TABS = ['All', 'New', 'Accepted', 'Rejected'];
+
+// App tab → backend enquiry status.
+const TAB_TO_STATUS = { New: 'New', Accepted: 'Confirmed', Rejected: 'Cancelled' };
+// Backend status → simple label shown to the retailer.
+const STATUS_LABEL = { New: 'New', Confirmed: 'Accepted', Cancelled: 'Rejected' };
+const toLabel = (s) => STATUS_LABEL[s] || 'New';
 
 // Map backend enquiry response → shape EnquiryCard expects
 function mapEnquiry(e) {
@@ -26,7 +33,8 @@ function mapEnquiry(e) {
     unit:            e.unit,
     deliveryLocation: e.location || '',
     remarks:         e.remarks || '',
-    status:          e.status,
+    status:          toLabel(e.status),
+    rawStatus:       e.status,
     sellerReply:     e.seller_reply || '',
     seller:          e.seller ? { name: e.seller.name, location: [e.seller.city, e.seller.state].filter(Boolean).join(', ') } : null,
     createdAt:       e.created_at,
@@ -40,6 +48,7 @@ function mapEnquiry(e) {
 export default function EnquiriesScreen({ navigation }) {
   const [activeTab, setActiveTab]     = useState('All');
   const [enquiries, setEnquiries]     = useState([]);
+  const [search, setSearch]           = useState('');
   const [loading, setLoading]         = useState(true);
   const [refreshing, setRefreshing]   = useState(false);
   const [error, setError]             = useState('');
@@ -55,7 +64,8 @@ export default function EnquiriesScreen({ navigation }) {
   const load = useCallback(async (tab = 'All') => {
     setError('');
     try {
-      const params = tab !== 'All' ? { status: tab, limit: 100 } : { limit: 100 };
+      const backendStatus = TAB_TO_STATUS[tab];
+      const params = backendStatus ? { status: backendStatus, limit: 100 } : { limit: 100 };
       const data = await enquiryApi.list(params);
       setEnquiries((data?.enquiries || []).map(mapEnquiry));
     } catch (err) {
@@ -71,6 +81,15 @@ export default function EnquiriesScreen({ navigation }) {
     })();
   }, [load, loadUnread, activeTab]);
 
+  // Re-fetch whenever the screen regains focus, so deleted/updated enquiries
+  // reflect immediately instead of showing a stale cached list.
+  useFocusEffect(
+    useCallback(() => {
+      load(activeTab);
+      loadUnread();
+    }, [load, loadUnread, activeTab]),
+  );
+
   const onRefresh = async () => {
     setRefreshing(true);
     await Promise.all([load(activeTab), loadUnread()]);
@@ -83,13 +102,27 @@ export default function EnquiriesScreen({ navigation }) {
     load(tab).then(() => setLoading(false));
   };
 
+  // Client-side search over enquiry code / product name.
+  const q = search.trim().toLowerCase();
+  const visibleEnquiries = q
+    ? enquiries.filter(e =>
+        (e.enquiryId || '').toLowerCase().includes(q) ||
+        (e.productName || '').toLowerCase().includes(q) ||
+        (e.productCode || '').toLowerCase().includes(q))
+    : enquiries;
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <StatusBar barStyle="light-content" backgroundColor={Colors.secondary} />
+      <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
 
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
+          {navigation.canGoBack() && (
+            <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Ionicons name="arrow-back" size={22} color="#FFF" />
+            </TouchableOpacity>
+          )}
           <Ionicons name="document-text-outline" size={20} color="#FFF" style={styles.headerIcon} />
           <Text style={styles.headerTitle}>My Enquiries</Text>
         </View>
@@ -103,6 +136,26 @@ export default function EnquiriesScreen({ navigation }) {
               </View>
             )}
           </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Search */}
+      <View style={styles.searchWrap}>
+        <View style={styles.searchBar}>
+          <Ionicons name="search-outline" size={18} color={Colors.textTertiary} />
+          <TextInput
+            style={styles.searchInput}
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Search enquiry code or product…"
+            placeholderTextColor={Colors.textTertiary}
+            returnKeyType="search"
+          />
+          {search.length > 0 && (
+            <TouchableOpacity onPress={() => setSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="close-circle" size={18} color={Colors.textTertiary} />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -139,17 +192,19 @@ export default function EnquiriesScreen({ navigation }) {
           <Text style={styles.errorText}>{error}</Text>
           <TouchableOpacity onPress={onRefresh}><Text style={styles.retryText}>Tap to retry</Text></TouchableOpacity>
         </View>
-      ) : enquiries.length === 0 ? (
+      ) : visibleEnquiries.length === 0 ? (
         <EmptyState
           iconName="document-outline"
-          title="No Enquiries"
-          message={`You have no ${activeTab !== 'All' ? activeTab.toLowerCase() + ' ' : ''}enquiries yet.`}
-          buttonTitle="SEARCH PRODUCTS"
-          onButtonPress={() => navigation.navigate(SCREENS.SEARCH)}
+          title={q ? 'No matches' : 'No Enquiries'}
+          message={q
+            ? `No enquiries match “${search.trim()}”.`
+            : `You have no ${activeTab !== 'All' ? activeTab.toLowerCase() + ' ' : ''}enquiries yet.`}
+          buttonTitle={q ? undefined : 'SEARCH PRODUCTS'}
+          onButtonPress={q ? undefined : () => navigation.navigate(SCREENS.SEARCH)}
         />
       ) : (
         <FlatList
-          data={enquiries}
+          data={visibleEnquiries}
           keyExtractor={i => i.id}
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
@@ -170,6 +225,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: Spacing.screenPadding, paddingVertical: Spacing.base, backgroundColor: Colors.secondary },
   headerLeft: { flexDirection: 'row', alignItems: 'center' },
+  backBtn: { marginRight: 8 },
   headerIcon: { marginRight: 8 },
   headerTitle: { ...Typography.h4, color: '#FFF' },
   headerCount: { ...Typography.caption, color: 'rgba(255,255,255,0.6)' },
@@ -177,6 +233,9 @@ const styles = StyleSheet.create({
   notifBtn: { position: 'relative', padding: 4 },
   badge: { position: 'absolute', top: 0, right: 0, backgroundColor: Colors.primary, borderRadius: 8, minWidth: 16, height: 16, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3, borderWidth: 1.5, borderColor: Colors.secondary },
   badgeText: { color: Colors.white, fontSize: 9, fontWeight: '800' },
+  searchWrap: { backgroundColor: Colors.white, paddingHorizontal: Spacing.screenPadding, paddingTop: 10 },
+  searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Colors.background, borderRadius: BorderRadius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 12, height: 42 },
+  searchInput: { flex: 1, ...Typography.body2, color: Colors.textPrimary, paddingVertical: 0 },
   tabsWrapper: { backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
   tabs: { paddingHorizontal: Spacing.screenPadding, paddingVertical: 10, gap: 6 },
   tab: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: BorderRadius.chip, borderWidth: 1.5, borderColor: Colors.border, backgroundColor: Colors.white },

@@ -44,11 +44,21 @@ export default function ProfileScreen({ navigation }) {
 
   return (
     <SafeAreaView style={st.safe} edges={['top']}>
-      <StatusBar barStyle="light-content" backgroundColor={Colors.secondary} />
+      <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
 
       {/* ═══ HEADER ═══ */}
       <View style={st.header}>
-        <Text style={st.headerTitle}>My Profile</Text>
+        <View style={st.headerTopRow}>
+          <TouchableOpacity
+            style={st.backBtn}
+            onPress={() => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate('HomeTab'))}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons name="arrow-back" size={22} color="#FFF" />
+          </TouchableOpacity>
+          <Text style={st.headerTitle}>My Profile</Text>
+          <View style={st.backBtn} />
+        </View>
 
         {/* Profile card inside header — sticks out below */}
         <View style={st.profileCard}>
@@ -122,6 +132,12 @@ export default function ProfileScreen({ navigation }) {
           </View>
         </View>
 
+        {/* ═══ BILLING ═══ */}
+        <Text style={st.secTitle}>Billing</Text>
+        <View style={st.menuCard}>
+          <MenuItem icon="receipt-outline" color={Colors.primary} label="Invoices & Payments" onPress={() => navigation.navigate(SCREENS.INVOICES)} last />
+        </View>
+
         {/* ═══ MENU ═══ */}
         <Text style={st.secTitle}>Settings</Text>
         <View style={st.menuCard}>
@@ -185,7 +201,9 @@ const st = StyleSheet.create({
 
   /* Header */
   header: { backgroundColor: Colors.secondary, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 24, alignItems: 'center', overflow: 'visible', zIndex: 10 },
-  headerTitle: { fontSize: 22, fontWeight: '800', color: '#FFF', marginBottom: 18 },
+  headerTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', alignSelf: 'stretch', marginBottom: 18 },
+  backBtn: { width: 32, height: 32, alignItems: 'flex-start', justifyContent: 'center' },
+  headerTitle: { fontSize: 22, fontWeight: '800', color: '#FFF' },
 
   /* Profile card — inside header, sticks out */
   profileCard: {
