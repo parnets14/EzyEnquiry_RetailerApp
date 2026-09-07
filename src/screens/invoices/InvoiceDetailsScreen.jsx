@@ -186,6 +186,23 @@ export default function InvoiceDetailsScreen({ navigation, route }) {
           </InfoCard>
         ) : null}
 
+        {/* Linked Dispatch */}
+        {invoice.dispatch ? (
+          <InfoCard title="Linked Dispatch">
+            {invoice.dispatch.dispatch_code ? <Row label="Dispatch Code" value={invoice.dispatch.dispatch_code} /> : null}
+            {invoice.dispatch.status ? <Row label="Status" value={invoice.dispatch.status.replace(/_/g, ' ')} /> : null}
+            {invoice.dispatch.driver_name ? <Row label="Driver" value={invoice.dispatch.driver_name} /> : null}
+            {invoice.dispatch.driver_mobile ? <Row label="Driver Mobile" value={invoice.dispatch.driver_mobile} /> : null}
+            {invoice.dispatch.vehicle_number ? <Row label="Vehicle" value={invoice.dispatch.vehicle_number} /> : null}
+            {invoice.dispatch.transport_name ? <Row label="Transport" value={invoice.dispatch.transport_name} /> : null}
+            {invoice.dispatch.lr_number ? <Row label="LR Number" value={invoice.dispatch.lr_number} /> : null}
+            {invoice.dispatch.dispatch_date ? <Row label="Dispatch Date" value={formatDate(invoice.dispatch.dispatch_date)} /> : null}
+            {invoice.dispatch.expected_delivery ? <Row label="Expected Delivery" value={formatDate(invoice.dispatch.expected_delivery)} /> : null}
+            {invoice.dispatch.delivered_date ? <Row label="Delivered" value={formatDate(invoice.dispatch.delivered_date)} /> : null}
+            {invoice.dispatch.notes ? <Row label="Notes" value={invoice.dispatch.notes} /> : null}
+          </InfoCard>
+        ) : null}
+
         {isPaid ? (
           <View style={styles.paidBanner}>
             <Ionicons name="checkmark-circle" size={20} color={Colors.success} />
