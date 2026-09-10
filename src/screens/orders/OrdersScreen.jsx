@@ -13,8 +13,8 @@ import EmptyState from '../../components/common/EmptyState';
 import { orderApi, notificationApi } from '../../utils/api';
 import { SCREENS } from '../../constants';
 
-const TABS = ['All', 'New', 'Accepted', 'Processing', 'ReadyForDispatch', 'Dispatched', 'InTransit', 'Delivered', 'Cancelled'];
-const TAB_LABELS = { ReadyForDispatch: 'Ready', InTransit: 'In Transit' };
+const TABS = ['All', 'New', 'Accepted', 'Packing', 'Dispatched', 'Out for Delivery', 'Delivered', 'Cancelled'];
+const TAB_LABELS = { 'Out for Delivery': 'On Way' };
 
 function mapOrder(o) {
   return {

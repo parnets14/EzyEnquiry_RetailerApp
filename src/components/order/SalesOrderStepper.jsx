@@ -7,26 +7,34 @@ import { Spacing } from '../../theme/spacing';
 
 /**
  * Compact horizontal fulfilment stepper for a Sales Order.
- * Flow: New → Accepted → Packing → Dispatched → Out for Delivery → Delivered.
+ * Unified 6-stage flow: New → Accepted → Packing → Dispatched → Out for Delivery → Delivered
  */
 const STEPS = [
-  { key: 'New',            label: 'Placed',     icon: 'receipt-outline' },
-  { key: 'Accepted',       label: 'Accepted',   icon: 'checkmark-circle-outline' },
-  { key: 'Packing',        label: 'Packing',    icon: 'cube-outline' },
-  { key: 'Dispatched',     label: 'Dispatched', icon: 'car-outline' },
-  { key: 'OutForDelivery', label: 'Out',        icon: 'navigate-outline' },
-  { key: 'Delivered',      label: 'Delivered',  icon: 'flag-outline' },
+  { key: 'New',             label: 'Placed',    icon: 'receipt-outline'          },
+  { key: 'Accepted',        label: 'Accepted',  icon: 'checkmark-circle-outline' },
+  { key: 'Packing',         label: 'Packing',   icon: 'cube-outline'             },
+  { key: 'Dispatched',      label: 'Dispatched',icon: 'car-outline'              },
+  { key: 'Out for Delivery',label: 'On Way',    icon: 'navigate-outline'         },
+  { key: 'Delivered',       label: 'Delivered', icon: 'flag-outline'             },
 ];
 
-// Map the retailer-facing (Android) status to a stepper stage index.
+// Map every status string (current + legacy) → STEPS array index
 const STAGE_INDEX = {
-  New: 0,
-  Accepted: 1,
-  Processing: 2,
-  ReadyForDispatch: 2,
-  Dispatched: 3,
-  InTransit: 4,
-  Delivered: 5,
+  // Current 6-stage statuses
+  'New':             0,
+  'Accepted':        1,
+  'Packing':         2,
+  'Dispatched':      3,
+  'Out for Delivery':4,
+  'Delivered':       5,
+  // Legacy statuses (backward compat with existing orders in DB)
+  'Processing':       2,
+  'Ready':            3,
+  'ReadyForDispatch': 3,
+  'Ready for Dispatch':3,
+  'Partially Dispatched':3,
+  'InTransit':        4,
+  'In Transit':       4,
 };
 
 const SalesOrderStepper = ({ status }) => {

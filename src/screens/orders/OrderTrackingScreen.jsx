@@ -160,7 +160,7 @@ export default function OrderTrackingScreen({ navigation, route }) {
           </View>
         )}
 
-        {(status === 'Dispatched' || status === 'InTransit') && (
+        {(status === 'Dispatched' || status === 'Out for Delivery' || status === 'InTransit') && (
           <View style={styles.otpNote}>
             <Ionicons name="shield-checkmark-outline" size={16} color={Colors.primary} />
             <Text style={styles.otpNoteText}>
@@ -176,7 +176,7 @@ export default function OrderTrackingScreen({ navigation, route }) {
           </View>
         )}
 
-        {(status === 'Dispatched' || status === 'InTransit') && (
+        {(status === 'Dispatched' || status === 'Out for Delivery' || status === 'InTransit') && (
           <PrimaryButton
             title="ENTER DELIVERY OTP"
             onPress={() => navigation.navigate(SCREENS.DELIVERY_OTP, { orderId, dispatchId: dispatch?.id })}

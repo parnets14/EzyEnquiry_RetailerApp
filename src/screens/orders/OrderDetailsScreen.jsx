@@ -85,7 +85,9 @@ export default function OrderDetailsScreen({ navigation, route }) {
     );
   }
 
-  const canTrack  = ['Accepted', 'Processing', 'ReadyForDispatch', 'Dispatched', 'InTransit', 'Delivered'].includes(order.status);
+  const canTrack  = ['Accepted', 'Packing', 'Dispatched', 'Out for Delivery', 'Delivered',
+    // legacy backward-compat
+    'Processing', 'Ready', 'ReadyForDispatch', 'InTransit'].includes(order.status);
   const canCancel = ['New', 'Accepted'].includes(order.status);
   const charges   = (order.charges?.transport || 0) + (order.charges?.packing || 0) + (order.charges?.other || 0);
 
@@ -252,7 +254,7 @@ export default function OrderDetailsScreen({ navigation, route }) {
         )}
 
         {/* Actions */}
-        {(order.status === 'Dispatched' || order.status === 'InTransit') && (
+        {(order.status === 'Out for Delivery' || order.status === 'Dispatched' || order.status === 'InTransit') && (
           <PrimaryButton
             title="ENTER DELIVERY OTP"
             onPress={() => navigation.navigate(SCREENS.DELIVERY_OTP, { orderId: resolvedId, dispatchId: dispatches[0]?.id })}

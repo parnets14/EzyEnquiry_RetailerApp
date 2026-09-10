@@ -18,39 +18,36 @@ export const ENQUIRY_STATUS = {
   CANCELLED: 'Cancelled',
 };
 
-// Order Statuses — Sales Order lifecycle (retailer-facing)
-// QUOTATION → SALES ORDER → PICKING → DISPATCH → OUT FOR DELIVERY → DELIVERED
+// Order Statuses — unified 6-stage Sales Order lifecycle
+// New → Accepted → Packing → Dispatched → Out for Delivery → Delivered
 export const ORDER_STATUS = {
-  NEW: 'New',                    // Order created, awaiting seller acceptance
-  ACCEPTED: 'Accepted',          // Order Confirmed by seller
-  PROCESSING: 'Processing',      // Being prepared / picking
-  READY: 'ReadyForDispatch',     // Picked & ready
-  DISPATCHED: 'Dispatched',      // Handed to transport
-  IN_TRANSIT: 'InTransit',       // Out for delivery
-  DELIVERED: 'Delivered',        // OTP verified & delivered
-  CANCELLED: 'Cancelled',
+  NEW:              'New',             // Order created, awaiting seller acceptance
+  ACCEPTED:         'Accepted',        // Confirmed by seller
+  PACKING:          'Packing',         // Being packed & prepared
+  DISPATCHED:       'Dispatched',      // Handed to transport
+  OUT_FOR_DELIVERY: 'Out for Delivery',// In transit / out for delivery
+  DELIVERED:        'Delivered',       // OTP verified & delivered
+  CANCELLED:        'Cancelled',
 };
 
-// Human-readable labels for the retailer order lifecycle
+// Human-readable labels shown in the retailer UI
 export const ORDER_STATUS_LABEL = {
-  New: 'Order Placed',
-  Accepted: 'Order Confirmed',
-  Processing: 'Processing',
-  ReadyForDispatch: 'Ready / Picking',
-  Dispatched: 'Dispatched',
-  InTransit: 'Out for Delivery',
-  Delivered: 'Delivered',
-  Cancelled: 'Cancelled',
+  'New':             'Order Placed',
+  'Accepted':        'Order Confirmed',
+  'Packing':         'Being Packed',
+  'Dispatched':      'Dispatched',
+  'Out for Delivery':'Out for Delivery',
+  'Delivered':       'Delivered',
+  'Cancelled':       'Cancelled',
 };
 
 // Ordered lifecycle steps used to render the retailer order timeline
 export const ORDER_LIFECYCLE = [
   'New',
   'Accepted',
-  'Processing',
-  'ReadyForDispatch',
+  'Packing',
   'Dispatched',
-  'InTransit',
+  'Out for Delivery',
   'Delivered',
 ];
 

@@ -8,7 +8,9 @@ import StatusBadge from '../common/StatusBadge';
 import { formatDate, formatCurrency } from '../../utils/formatters';
 
 // Statuses where tracking makes sense
-const TRACKABLE = ['Accepted', 'Processing', 'ReadyForDispatch', 'Dispatched', 'InTransit', 'Delivered'];
+const TRACKABLE = ['Accepted', 'Packing', 'Dispatched', 'Out for Delivery', 'Delivered',
+  // legacy backward-compat
+  'Processing', 'Ready', 'ReadyForDispatch', 'InTransit'];
 
 const OrderCard = ({ order, onPress, onTrack }) => {
   const {
@@ -27,8 +29,9 @@ const OrderCard = ({ order, onPress, onTrack }) => {
     expectedDelivery,
   } = order;
 
-  const canTrack = ['Dispatched', 'InTransit', 'Delivered'].includes(status) || TRACKABLE.includes(status);
-  const isDispatched = status === 'Dispatched' || status === 'InTransit';
+  const canTrack = TRACKABLE.includes(status);
+  const isDispatched = status === 'Dispatched' || status === 'Out for Delivery'
+    || status === 'InTransit' || status === 'In Transit';
   const displayCode = orderCode || id;
   const displayDate = orderDate || createdAt;
 
@@ -40,9 +43,10 @@ const OrderCard = ({ order, onPress, onTrack }) => {
 
   // Accent colour on the left border tracks order urgency
   const accentColor =
-    status === 'New'        ? Colors.orderNew :
-    status === 'Dispatched' ? Colors.primary :
-    status === 'Delivered'  ? Colors.success :
+    status === 'New'             ? Colors.orderNew :
+    status === 'Dispatched'
+    || status === 'Out for Delivery' ? Colors.primary :
+    status === 'Delivered'       ? Colors.success :
     Colors.secondary;
 
   return (

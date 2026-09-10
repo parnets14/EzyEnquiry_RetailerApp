@@ -27,14 +27,28 @@ export const getOrderStatusStyle = (status) => {
       return { color: Colors.orderNew, backgroundColor: Colors.orderNewBg };
     case 'Accepted':
       return { color: Colors.orderAccepted, backgroundColor: Colors.orderAcceptedBg };
+    case 'Packing':
+    // legacy
     case 'Processing':
+    case 'Pending Approval':
+    case 'Approved':
+    case 'Picking Started':
+    case 'Picking Completed':
+    case 'Packing Started':
+    case 'Packing Completed':
+    case 'Invoice Generated':
       return { color: Colors.orderProcessing, backgroundColor: Colors.orderProcessingBg };
+    case 'Dispatched':
+    // legacy
     case 'Ready':
     case 'ReadyForDispatch':
-      return { color: Colors.orderReady, backgroundColor: Colors.orderReadyBg };
-    case 'Dispatched':
-      return { color: Colors.orderDispatched, backgroundColor: Colors.orderDispatchedBg };
+    case 'Ready for Dispatch':
+    case 'Partially Dispatched':
+      return { color: Colors.orderDispatched || Colors.orderReady, backgroundColor: Colors.orderDispatchedBg || Colors.orderReadyBg };
+    case 'Out for Delivery':
+    // legacy
     case 'InTransit':
+    case 'In Transit':
       return { color: Colors.primary, backgroundColor: Colors.primaryBg };
     case 'Delivered':
       return { color: Colors.orderDelivered, backgroundColor: Colors.orderDeliveredBg };

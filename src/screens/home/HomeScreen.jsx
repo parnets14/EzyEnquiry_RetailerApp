@@ -47,14 +47,19 @@ export default function HomeScreen({ navigation }) {
   const initials = ownerName.split(' ').map(w => w.charAt(0)).slice(0, 2).join('').toUpperCase();
 
   const STATUS_COLOR = {
-    Delivered:        '#27AE60',
-    Dispatched:       '#2980B9',
-    InTransit:        '#2980B9',
-    ReadyForDispatch: '#F39C12',
-    Processing:       '#E67E22',
-    Accepted:         '#27AE60',
-    New:              Colors.textSecondary,
-    Cancelled:        Colors.error,
+    Delivered:          '#27AE60',
+    'Out for Delivery': Colors.primary,
+    'Dispatched':       '#F39C12',
+    Packing:            '#E67E22',
+    Accepted:           '#27AE60',
+    New:                Colors.textSecondary,
+    Cancelled:          Colors.error,
+    // legacy backward-compat
+    Ready:              '#F39C12',
+    ReadyForDispatch:   '#F39C12',
+    InTransit:          Colors.primary,
+    'In Transit':       Colors.primary,
+    Processing:         '#E67E22',
   };
 
   return (
