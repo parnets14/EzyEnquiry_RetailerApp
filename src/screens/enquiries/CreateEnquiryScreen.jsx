@@ -322,7 +322,7 @@ export default function CreateEnquiryScreen({ navigation, route }) {
           <Ionicons name="arrow-back" size={22} color="#FFF" />
         </TouchableOpacity>
         <View style={styles.headerTitleWrap}>
-          <Text style={styles.headerTitle}>Send Enquiry</Text>
+          <Text style={styles.headerTitle}>Send Quotation</Text>
           <Text style={styles.headerSub}>Create a quotation request</Text>
         </View>
         <View style={styles.headerBtn} />
@@ -751,7 +751,7 @@ export default function CreateEnquiryScreen({ navigation, route }) {
               <View style={styles.summaryIconCircle}>
                 <Ionicons name="receipt-outline" size={20} color={Colors.secondary} />
               </View>
-              <Text style={styles.summaryTitle}>Enquiry Summary</Text>
+              <Text style={styles.summaryTitle}>Quotation Summary</Text>
             </View>
 
             <View style={styles.summaryDivider} />
@@ -790,7 +790,7 @@ export default function CreateEnquiryScreen({ navigation, route }) {
 
           {/* ═══ Submit Button ═══ */}
           <PrimaryButton
-            title="SEND ENQUIRY"
+            title="SEND QUOTATION"
             onPress={handleSubmit}
             loading={loading}
             size="lg"

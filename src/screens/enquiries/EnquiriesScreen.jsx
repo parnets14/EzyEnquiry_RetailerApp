@@ -124,7 +124,7 @@ export default function EnquiriesScreen({ navigation }) {
             </TouchableOpacity>
           )}
           <Ionicons name="document-text-outline" size={20} color="#FFF" style={styles.headerIcon} />
-          <Text style={styles.headerTitle}>My Enquiries</Text>
+          <Text style={styles.headerTitle}>My Quotations</Text>
         </View>
         <View style={styles.headerRight}>
           <Text style={styles.headerCount}>{enquiries.length} total</Text>
@@ -147,7 +147,7 @@ export default function EnquiriesScreen({ navigation }) {
             style={styles.searchInput}
             value={search}
             onChangeText={setSearch}
-            placeholder="Search enquiry code or product…"
+            placeholder="Search quotation code or product…"
             placeholderTextColor={Colors.textTertiary}
             returnKeyType="search"
           />

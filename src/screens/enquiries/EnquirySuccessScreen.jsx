@@ -12,12 +12,12 @@ const EnquirySuccessScreen = ({ navigation, route }) => {
     <SafeAreaView style={{ flex: 1, backgroundColor: Colors.white }}>
       <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
       <SuccessState
-        title="Enquiry Sent Successfully"
-        subtitle={`Your enquiry for ${product?.name || 'the product'} has been sent. The seller will respond shortly.`}
-        referenceLabel="Enquiry ID"
+        title="Quotation Sent Successfully"
+        subtitle={`Your quotation request for ${product?.name || 'the product'} has been sent. The seller will respond shortly.`}
+        referenceLabel="Quotation ID"
         referenceValue={enquiryId}
-        message="You will be notified when the seller responds to your enquiry."
-        primaryButtonTitle="VIEW ENQUIRY"
+        message="You will be notified when the seller responds to your quotation."
+        primaryButtonTitle="VIEW QUOTATION"
         onPrimaryPress={() => {
           if (enquiryDbId) {
             navigation.replace(SCREENS.HOME);

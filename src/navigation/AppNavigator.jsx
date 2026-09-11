@@ -72,7 +72,7 @@ const Tab = createBottomTabNavigator();
 const TAB_CONFIG = {
   HomeTab:             { icon: 'home-outline',           iconActive: 'home',             label: 'Home' },
   [SCREENS.SEARCH]:    { icon: 'search-outline',    iconActive: 'search',           label: 'Search' },
-  [SCREENS.ENQUIRIES]: { icon: 'document-text-outline', iconActive: 'document-text', label: 'Enquiries' },
+  [SCREENS.ENQUIRIES]: { icon: 'document-text-outline', iconActive: 'document-text', label: 'Quotations' },
   [SCREENS.ORDERS]:    { icon: 'cube-outline',      iconActive: 'cube',             label: 'Orders' },
   [SCREENS.PROFILE]:   { icon: 'person-outline',    iconActive: 'person',           label: 'Profile' },
 };
