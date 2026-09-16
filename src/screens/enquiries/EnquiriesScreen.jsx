@@ -14,13 +14,28 @@ import EmptyState from '../../components/common/EmptyState';
 import { enquiryApi, notificationApi } from '../../utils/api';
 import { SCREENS } from '../../constants';
 
-const TABS = ['All', 'New', 'Accepted', 'Rejected'];
+const TABS = ['All', 'New', 'In Progress', 'Accepted', 'Rejected'];
 
-// App tab → backend enquiry status.
-const TAB_TO_STATUS = { New: 'New', Accepted: 'Confirmed', Rejected: 'Cancelled' };
-// Backend status → simple label shown to the retailer.
-const STATUS_LABEL = { New: 'New', Confirmed: 'Accepted', Cancelled: 'Rejected' };
-const toLabel = (s) => STATUS_LABEL[s] || 'New';
+// App tab → one or more backend enquiry statuses.
+// 'In Progress' covers the mid-stage statuses: Viewed, Replied, Negotiation.
+const TAB_TO_STATUS = {
+  New:         'New',
+  'In Progress': null,   // handled separately — multi-status filter
+  Accepted:    'Confirmed',
+  Rejected:    'Cancelled',
+};
+const IN_PROGRESS_STATUSES = ['Viewed', 'Replied', 'Negotiation'];
+
+// Backend status → human-readable label shown to the retailer.
+const STATUS_LABEL = {
+  New:         'New',
+  Viewed:      'Viewed',
+  Replied:     'Replied',
+  Negotiation: 'Negotiation',
+  Confirmed:   'Accepted',
+  Cancelled:   'Rejected',
+};
+const toLabel = (s) => STATUS_LABEL[s] || s || 'New';
 
 // Map backend enquiry response → shape EnquiryCard expects
 function mapEnquiry(e) {
@@ -64,10 +79,21 @@ export default function EnquiriesScreen({ navigation }) {
   const load = useCallback(async (tab = 'All') => {
     setError('');
     try {
-      const backendStatus = TAB_TO_STATUS[tab];
-      const params = backendStatus ? { status: backendStatus, limit: 100 } : { limit: 100 };
+      let params = { limit: 100 };
+      if (tab === 'In Progress') {
+        // Send multiple status values; backend filters with $in when array passed
+        params.status = IN_PROGRESS_STATUSES.join(',');
+      } else {
+        const backendStatus = TAB_TO_STATUS[tab];
+        if (backendStatus) params.status = backendStatus;
+      }
       const data = await enquiryApi.list(params);
-      setEnquiries((data?.enquiries || []).map(mapEnquiry));
+      let list = data?.enquiries || [];
+      // Client-side filter for 'In Progress' if backend doesn't support comma-separated status
+      if (tab === 'In Progress') {
+        list = list.filter(e => IN_PROGRESS_STATUSES.includes(e.status));
+      }
+      setEnquiries(list.map(mapEnquiry));
     } catch (err) {
       setError(err.message || 'Could not load enquiries.');
     }
