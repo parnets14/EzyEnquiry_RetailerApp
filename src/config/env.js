@@ -13,10 +13,9 @@ import { Platform } from 'react-native';
  * Example: const API_HOST_OVERRIDE = 'https://api.ezyenquiry.com';
  */
 
-// ─── Render production backend ────────────────────────────────────────────────
+// ─── Production backend (Render) ──────────────────────────────────────────────
 const PRODUCTION_HOST = 'https://ezyenquiry-backend.onrender.com';
 
-// Always use Render backend (dev and prod)
 export const API_HOST = PRODUCTION_HOST;
 
 // All backend routes are namespaced under /api

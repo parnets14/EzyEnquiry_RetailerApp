@@ -22,19 +22,54 @@ export default function LoginScreen({ navigation }) {
   const [otp, setOtp]         = useState(Array(OTP_LENGTH).fill(''));
   const [otpErr, setOtpErr]   = useState('');
   const [loading, setLoading] = useState(false);
-  const [timer, setTimer]     = useState(0);
-  const [devOtp, setDevOtp]   = useState('');
+  const [timer, setTimer]       = useState(0);   // resend cooldown (30s)
+  const [expiry, setExpiry]     = useState(0);   // OTP expiry countdown (5 min)
+  const [devOtp, setDevOtp]     = useState('');
   const [notRegistered, setNotRegistered] = useState(false);
-  const refs   = useRef([]);
-  const intRef = useRef(null);
+  const [otpExpired, setOtpExpired] = useState(false);
+  const refs      = useRef([]);
+  const intRef    = useRef(null);
+  const expiryRef = useRef(null);
+
+  const OTP_EXPIRY_SECONDS = 5 * 60; // 5 minutes — matches backend
 
   const startTimer = () => {
+    // Resend cooldown — 30 s
     setTimer(30);
     intRef.current = setInterval(() => setTimer(p => {
       if (p <= 1) { clearInterval(intRef.current); return 0; }
       return p - 1;
     }), 1000);
   };
+
+  const startExpiryTimer = () => {
+    // OTP validity countdown — 5 min
+    setOtpExpired(false);
+    setExpiry(OTP_EXPIRY_SECONDS);
+    clearInterval(expiryRef.current);
+    expiryRef.current = setInterval(() => setExpiry(p => {
+      if (p <= 1) {
+        clearInterval(expiryRef.current);
+        setOtpExpired(true);
+        return 0;
+      }
+      return p - 1;
+    }), 1000);
+  };
+
+  // Format seconds as MM:SS
+  const formatExpiry = (secs) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  // Expiry colour: green → yellow (last 2 min) → red (last 30 s)
+  const expiryColor = expiry <= 30
+    ? '#FF4444'
+    : expiry <= 120
+      ? '#F39C12'
+      : '#27AE60';
 
   // Step 1 — send login OTP to the registered mobile number
   const sendOtp = async () => {
@@ -48,6 +83,7 @@ export default function LoginScreen({ navigation }) {
       setLoading(false);
       setStep('otp');
       startTimer();
+      startExpiryTimer();
     } catch (err) {
       setLoading(false);
       // Backend returns 404 when the mobile has never registered, or 403 when company not found
@@ -64,6 +100,7 @@ export default function LoginScreen({ navigation }) {
   const verify = async () => {
     const code = otp.join('');
     if (code.length < OTP_LENGTH) { setOtpErr('Enter the 6-digit OTP'); return; }
+    if (otpExpired) { setOtpErr('OTP has expired. Please request a new one.'); return; }
     setOtpErr('');
     setLoading(true);
     try {
@@ -90,7 +127,8 @@ export default function LoginScreen({ navigation }) {
   };
   const resend = async () => {
     if (timer > 0) return;
-    setOtp(Array(OTP_LENGTH).fill('')); setOtpErr(''); startTimer();
+    setOtp(Array(OTP_LENGTH).fill('')); setOtpErr(''); setOtpExpired(false);
+    startTimer(); startExpiryTimer();
     try {
       const data = await authApi.sendOtp(phone, 'login');
       setDevOtp(data?.otp || '');
@@ -98,7 +136,8 @@ export default function LoginScreen({ navigation }) {
   };
   const changeNumber = () => {
     setStep('phone'); setOtp(Array(OTP_LENGTH).fill('')); setOtpErr('');
-    clearInterval(intRef.current); setTimer(0);
+    clearInterval(intRef.current); clearInterval(expiryRef.current);
+    setTimer(0); setExpiry(0); setOtpExpired(false);
   };
 
   return (
@@ -156,6 +195,23 @@ export default function LoginScreen({ navigation }) {
               {/* ─── Step 2: OTP ─── */}
               {step === 'otp' && (
                 <>
+                  {/* OTP Expiry Timer */}
+                  <View style={s.expiryRow}>
+                    <View style={[s.expiryBadge, { borderColor: expiryColor }]}>
+                      <Text style={s.expiryIcon}>⏱</Text>
+                      {otpExpired ? (
+                        <Text style={[s.expiryText, { color: '#FF4444' }]}>OTP Expired</Text>
+                      ) : (
+                        <>
+                          <Text style={[s.expiryText, { color: expiryColor }]}>
+                            {formatExpiry(expiry)}
+                          </Text>
+                          <Text style={s.expiryLabel}> remaining</Text>
+                        </>
+                      )}
+                    </View>
+                  </View>
+
                   {devOtp ? (
                     <View style={s.devOtpBox}>
                       <Text style={s.devOtpLabel}>Your OTP (dev)</Text>
@@ -180,7 +236,14 @@ export default function LoginScreen({ navigation }) {
                     ))}
                   </View>
                   {otpErr ? <Text style={s.err}>{otpErr}</Text> : null}
-                  <PrimaryButton title="Verify & Login" onPress={verify} loading={loading} size="lg" style={s.btn} />
+                  <PrimaryButton
+                    title="Verify & Login"
+                    onPress={verify}
+                    loading={loading}
+                    disabled={otpExpired}
+                    size="lg"
+                    style={s.btn}
+                  />
                   <View style={s.otpLinks}>
                     <TouchableOpacity onPress={resend} disabled={timer > 0}>
                       <Text style={[s.link, timer > 0 && s.linkOff]}>
@@ -254,6 +317,17 @@ const s = StyleSheet.create({
   fieldPrefix: { fontSize: 14, fontWeight: '700', color: '#FFFFFF', paddingLeft: 16 },
   fieldDivider: { width: 1, height: 22, backgroundColor: 'rgba(255,255,255,0.15)', marginHorizontal: 12 },
   fieldInput: { flex: 1, fontSize: 16, color: '#FFFFFF', letterSpacing: 1, paddingRight: 16 },
+
+  /* ═══ OTP Expiry Timer ═══ */
+  expiryRow: { alignItems: 'center', marginBottom: 16 },
+  expiryBadge: {
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16,
+    paddingVertical: 8, borderRadius: 20, borderWidth: 1,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  expiryIcon: { fontSize: 14, marginRight: 6 },
+  expiryText: { fontSize: 18, fontWeight: '800', letterSpacing: 1.5 },
+  expiryLabel: { fontSize: 12, color: 'rgba(255,255,255,0.45)', marginLeft: 2 },
 
   /* ═══ OTP ═══ */
   otpRow: { flexDirection: 'row', gap: 8 },
