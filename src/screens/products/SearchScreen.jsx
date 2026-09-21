@@ -170,10 +170,10 @@ const SearchScreen = ({ navigation }) => {
           </View>
           <TouchableOpacity
             style={styles.addBtn}
-            onPress={() => navigation.navigate(SCREENS.ADD_PRODUCT)}
+            onPress={() => navigation.navigate(SCREENS.MY_PRODUCTS)}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <Ionicons name="add-circle-outline" size={26} color="#FFF" />
+            <Ionicons name="grid-outline" size={24} color="#FFF" />
           </TouchableOpacity>
         </View>
 

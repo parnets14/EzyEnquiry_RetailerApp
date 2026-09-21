@@ -118,6 +118,10 @@ export const SCREENS = {
   // Notifications
   NOTIFICATIONS: 'Notifications',
 
+  // Staff Management
+  STAFF_LIST:       'StaffList',
+  STAFF_ADD_EDIT:   'StaffAddEdit',
+
   // Profile
   COMPANY_DETAILS: 'CompanyDetails',
   DOCUMENTS: 'Documents',

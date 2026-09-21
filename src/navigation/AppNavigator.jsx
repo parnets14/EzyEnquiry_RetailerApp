@@ -29,6 +29,7 @@ import ProfileScreen from '../screens/profile/ProfileScreen';
 import ProductDetailsScreen from '../screens/products/ProductDetailsScreen';
 import SearchResultsScreen from '../screens/products/SearchResultsScreen';
 import AddProductScreen from '../screens/products/AddProductScreen';
+import MyProductsScreen from '../screens/products/MyProductsScreen';
 
 // Enquiry Screens
 import CreateEnquiryScreen from '../screens/enquiries/CreateEnquiryScreen';
@@ -64,6 +65,10 @@ import {
   ChangePasswordScreen,
   HelpSupportScreen,
 } from '../screens/profile/SettingsScreen';
+
+// Staff Management Screens
+import StaffListScreen    from '../screens/staff/StaffListScreen';
+import AddEditStaffScreen from '../screens/staff/AddEditStaffScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -168,6 +173,10 @@ const AppNavigator = React.forwardRef((props, ref) => (
         component={AddProductScreen}
         options={{ animation: 'slide_from_bottom' }}
       />
+      <Stack.Screen
+        name={SCREENS.MY_PRODUCTS}
+        component={MyProductsScreen}
+      />
 
       {/* Enquiries */}
       <Stack.Screen name={SCREENS.CREATE_ENQUIRY}    component={CreateEnquiryScreen} />
@@ -209,6 +218,14 @@ const AppNavigator = React.forwardRef((props, ref) => (
       <Stack.Screen name={SCREENS.NOTIFICATION_SETTINGS}  component={NotificationSettingsScreen} />
       <Stack.Screen name={SCREENS.CHANGE_PASSWORD}        component={ChangePasswordScreen} />
       <Stack.Screen name={SCREENS.HELP_SUPPORT}           component={HelpSupportScreen} />
+
+      {/* Staff Management */}
+      <Stack.Screen name={SCREENS.STAFF_LIST}     component={StaffListScreen} />
+      <Stack.Screen
+        name={SCREENS.STAFF_ADD_EDIT}
+        component={AddEditStaffScreen}
+        options={{ animation: 'slide_from_bottom' }}
+      />
     </Stack.Navigator>
   </NavigationContainer>
 ));

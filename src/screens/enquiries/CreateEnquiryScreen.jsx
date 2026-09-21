@@ -120,13 +120,13 @@ export default function CreateEnquiryScreen({ navigation, route }) {
     return () => { active = false; };
   }, [ownerCompanyId, productId]);
 
-  // Load the Admin company's customers (added by Admin, Staff app, or Retailer
-  // app). ownerCompanyId is optional — the backend defaults to the Admin company.
+  // Load only THIS retailer's own customers (added via retailer API).
   const [custError, setCustError] = useState('');
   const loadCustomers = useCallback(async () => {
     setCustLoading(true);
     setCustError('');
     try {
+      // Backend now filters to only this retailer's customers automatically
       const data = await customerApi.list(ownerCompanyId || undefined, { limit: 200 });
       setCustomers(data?.customers || []);
     } catch (err) {
@@ -539,7 +539,7 @@ export default function CreateEnquiryScreen({ navigation, route }) {
                   <View style={styles.searchHint}>
                     <Ionicons name="search-outline" size={16} color={Colors.textTertiary} />
                     <Text style={styles.searchHintText}>
-                      {custLoading ? 'Loading customers…' : 'Start typing to search customers'}
+                      {custLoading ? 'Loading your customers…' : 'Type to search your customers'}
                     </Text>
                   </View>
                 ) : filteredCustomers.length === 0 ? (

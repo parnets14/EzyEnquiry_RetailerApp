@@ -141,12 +141,13 @@ export default function ProfileScreen({ navigation }) {
         {/* ═══ MENU ═══ */}
         <Text style={st.secTitle}>Settings</Text>
         <View style={st.menuCard}>
-          <MenuItem icon="create-outline" color="#2980B9" label="Edit Company" onPress={() => navigation.navigate(SCREENS.COMPANY_DETAILS)} />
-          <MenuItem icon="document-attach-outline" color="#27AE60" label="Documents" onPress={() => navigation.navigate(SCREENS.DOCUMENTS)} />
-          <MenuItem icon="star-outline" color="#F59E0B" label="Subscription" onPress={() => navigation.navigate(SCREENS.SUBSCRIPTION)} />
-          <MenuItem icon="notifications-outline" color="#8E44AD" label="Notifications" onPress={() => navigation.navigate(SCREENS.NOTIFICATION_SETTINGS)} />
-          <MenuItem icon="help-circle-outline" color="#06B6D4" label="Help & Support" onPress={() => navigation.navigate(SCREENS.HELP_SUPPORT)} />
-          <MenuItem icon="log-out-outline" color="#E74C3C" label="Logout" onPress={() => setShowLogout(true)} last />
+          <MenuItem icon="create-outline"          color="#2980B9"       label="Edit Company"      onPress={() => navigation.navigate(SCREENS.COMPANY_DETAILS)} />
+          <MenuItem icon="document-attach-outline" color="#27AE60"       label="Documents"         onPress={() => navigation.navigate(SCREENS.DOCUMENTS)} />
+          <MenuItem icon="people-outline"          color={Colors.secondary} label="My Staff"       onPress={() => navigation.navigate(SCREENS.STAFF_LIST)} />
+          <MenuItem icon="star-outline"            color="#F59E0B"       label="Subscription"      onPress={() => navigation.navigate(SCREENS.SUBSCRIPTION)} />
+          <MenuItem icon="notifications-outline"   color="#8E44AD"       label="Notifications"     onPress={() => navigation.navigate(SCREENS.NOTIFICATION_SETTINGS)} />
+          <MenuItem icon="help-circle-outline"     color="#06B6D4"       label="Help & Support"    onPress={() => navigation.navigate(SCREENS.HELP_SUPPORT)} />
+          <MenuItem icon="log-out-outline"         color="#E74C3C"       label="Logout"            onPress={() => setShowLogout(true)} last />
         </View>
 
         {/* App info */}

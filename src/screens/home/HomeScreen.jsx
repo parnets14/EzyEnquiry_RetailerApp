@@ -155,11 +155,43 @@ export default function HomeScreen({ navigation }) {
 
             {/* ─── Quick Actions ─── */}
             <Text style={st.secTitle}>Quick Actions</Text>
-            <View style={st.quickRow}>
-              <QA icon="search"         label="Search"     color="#2980B9" bg="#EBF5FB" onPress={() => navigation.navigate(SCREENS.SEARCH)} />
-              <QA icon="document-text"  label="Quotations" color="#8E44AD" bg="#F5EEF8" onPress={() => navigation.navigate(SCREENS.QUOTATIONS)} />
-              <QA icon="cube"           label="Orders"     color="#27AE60" bg="#E8F8EF" onPress={() => navigation.navigate(SCREENS.ORDERS)} />
-              <QA icon="receipt"        label="Invoices"   color={Colors.primary} bg="#FFF3EE" onPress={() => navigation.navigate(SCREENS.INVOICES)} />
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={st.quickRow}
+            >
+              <QA icon="search"         label="Search"      color="#2980B9" bg="#EBF5FB" onPress={() => navigation.navigate(SCREENS.SEARCH)} />
+              <QA icon="cube"           label="Products"    color={Colors.primary} bg="#FFF3EE" onPress={() => navigation.navigate(SCREENS.MY_PRODUCTS)} />
+              <QA icon="add-circle"     label="Add Product" color="#27AE60" bg="#E8F8EF" onPress={() => navigation.navigate(SCREENS.ADD_PRODUCT)} />
+              <QA icon="document-text"  label="Quotations"  color="#8E44AD" bg="#F5EEF8" onPress={() => navigation.navigate(SCREENS.QUOTATIONS)} />
+              <QA icon="receipt"        label="Invoices"    color="#E67E22" bg="#FDF0E4" onPress={() => navigation.navigate(SCREENS.INVOICES)} />
+            </ScrollView>
+
+            {/* ─── Staff Management ─── */}
+            <View style={st.staffCard}>
+              <View style={st.staffCardLeft}>
+                <View style={st.staffCardIcon}>
+                  <Ionicons name="people-outline" size={22} color={Colors.secondary} />
+                </View>
+                <View>
+                  <Text style={st.staffCardTitle}>My Staff</Text>
+                  <Text style={st.staffCardSub}>Manage staff access & salary</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                style={st.staffAddBtn}
+                onPress={() => navigation.navigate(SCREENS.STAFF_ADD_EDIT)}
+              >
+                <Ionicons name="person-add-outline" size={14} color="#FFF" />
+                <Text style={st.staffAddBtnTxt}>Add Staff</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={st.staffViewBtn}
+                onPress={() => navigation.navigate(SCREENS.STAFF_LIST)}
+              >
+                <Text style={st.staffViewBtnTxt}>View All</Text>
+                <Ionicons name="chevron-forward" size={14} color={Colors.secondary} />
+              </TouchableOpacity>
             </View>
 
             {/* ─── Recent Orders ─── */}
@@ -277,10 +309,10 @@ const st = StyleSheet.create({
   ovLabel: { fontSize: 10, fontWeight: '600', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.3 },
   ovSub: { fontSize: 10, fontWeight: '700', marginTop: 1 },
 
-  quickRow: { flexDirection: 'row', paddingHorizontal: 16, gap: 8 },
-  qaBtn: { flex: 1, alignItems: 'center', gap: 6, backgroundColor: '#FFF', borderRadius: 12, paddingVertical: 10, ...Shadows.sm },
+  quickRow: { flexDirection: 'row', paddingHorizontal: 16, gap: 8, paddingRight: 16 },
+  qaBtn: { width: 72, alignItems: 'center', gap: 6, backgroundColor: '#FFF', borderRadius: 12, paddingVertical: 10, ...Shadows.sm },
   qaIcon: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  qaLbl: { fontSize: 10, fontWeight: '600', color: Colors.textPrimary },
+  qaLbl: { fontSize: 9, fontWeight: '600', color: Colors.textPrimary, textAlign: 'center' },
 
   orderCard: { backgroundColor: '#FFF', borderRadius: 12, padding: 14, marginHorizontal: 16, marginBottom: 10, ...Shadows.sm, borderLeftWidth: 3, borderLeftColor: Colors.primary },
   orderTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
@@ -293,4 +325,15 @@ const st = StyleSheet.create({
   emptyOrders: { alignItems: 'center', paddingVertical: 32, gap: 8, marginHorizontal: 16, backgroundColor: '#FFF', borderRadius: 12, marginTop: 8, ...Shadows.sm },
   emptyText: { fontSize: 14, color: Colors.textSecondary, fontWeight: '600' },
   emptyAction: { fontSize: 13, color: Colors.primary, fontWeight: '700' },
+
+  // Staff management card
+  staffCard:      { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 12, marginHorizontal: 16, marginTop: 10, paddingHorizontal: 14, paddingVertical: 12, ...Shadows.sm, gap: 10, borderLeftWidth: 3, borderLeftColor: Colors.secondary },
+  staffCardLeft:  { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  staffCardIcon:  { width: 36, height: 36, borderRadius: 9, backgroundColor: Colors.secondaryBg, alignItems: 'center', justifyContent: 'center' },
+  staffCardTitle: { fontSize: 13, fontWeight: '700', color: Colors.textPrimary },
+  staffCardSub:   { fontSize: 11, color: Colors.textSecondary, marginTop: 1 },
+  staffAddBtn:    { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: Colors.primary, borderRadius: 16, paddingHorizontal: 10, paddingVertical: 6 },
+  staffAddBtnTxt: { fontSize: 11, fontWeight: '700', color: '#FFF' },
+  staffViewBtn:   { flexDirection: 'row', alignItems: 'center', gap: 2, paddingHorizontal: 8, paddingVertical: 6 },
+  staffViewBtnTxt:{ fontSize: 11, fontWeight: '700', color: Colors.secondary },
 });

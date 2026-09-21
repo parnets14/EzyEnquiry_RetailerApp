@@ -428,6 +428,79 @@ export function mediaUrl(path) {
   return `${API_HOST}${path.startsWith('/') ? '' : '/'}${path}`;
 }
 
+// ─── Catalog API (categories, sub-categories, brands for Add Product dropdowns) ─
+export const catalogApi = {
+  /** GET /api/retailer/catalog/categories */
+  categories() {
+    return request(`${RETAILER_BASE}/catalog/categories`, { auth: true });
+  },
+  /** GET /api/retailer/catalog/sub-categories?category_id=xxx */
+  subCategories(categoryId = '') {
+    const q = categoryId ? `?category_id=${encodeURIComponent(categoryId)}` : '';
+    return request(`${RETAILER_BASE}/catalog/sub-categories${q}`, { auth: true });
+  },
+  /** GET /api/retailer/catalog/brands */
+  brands() {
+    return request(`${RETAILER_BASE}/catalog/brands`, { auth: true });
+  },
+  /** POST /api/retailer/catalog/categories */
+  createCategory(body) {
+    return request(`${RETAILER_BASE}/catalog/categories`, { method: 'POST', auth: true, body });
+  },
+  /** DELETE /api/retailer/catalog/categories/:id */
+  deleteCategory(id) {
+    return request(`${RETAILER_BASE}/catalog/categories/${id}`, { method: 'DELETE', auth: true });
+  },
+  /** POST /api/retailer/catalog/sub-categories */
+  createSubCategory(body) {
+    return request(`${RETAILER_BASE}/catalog/sub-categories`, { method: 'POST', auth: true, body });
+  },
+  /** DELETE /api/retailer/catalog/sub-categories/:id */
+  deleteSubCategory(id) {
+    return request(`${RETAILER_BASE}/catalog/sub-categories/${id}`, { method: 'DELETE', auth: true });
+  },
+  /** POST /api/retailer/catalog/brands */
+  createBrand(body) {
+    return request(`${RETAILER_BASE}/catalog/brands`, { method: 'POST', auth: true, body });
+  },
+  /** DELETE /api/retailer/catalog/brands/:id */
+  deleteBrand(id) {
+    return request(`${RETAILER_BASE}/catalog/brands/${id}`, { method: 'DELETE', auth: true });
+  },
+};
+
+// ─── Staff Management API ─────────────────────────────────────────────────────
+export const staffApi = {
+  /** GET /api/retailer/staff/modules — labelled list for access checkboxes */
+  getModules() {
+    return request(`${RETAILER_BASE}/staff/modules`, { auth: true });
+  },
+  /** GET /api/retailer/staff */
+  list(params = {}) {
+    return request(`${RETAILER_BASE}/staff${toQuery(params)}`, { auth: true });
+  },
+  /** GET /api/retailer/staff/:id */
+  get(id) {
+    return request(`${RETAILER_BASE}/staff/${id}`, { auth: true });
+  },
+  /** POST /api/retailer/staff */
+  create(body) {
+    return request(`${RETAILER_BASE}/staff`, { method: 'POST', auth: true, body });
+  },
+  /** PUT /api/retailer/staff/:id */
+  update(id, body) {
+    return request(`${RETAILER_BASE}/staff/${id}`, { method: 'PUT', auth: true, body });
+  },
+  /** PATCH /api/retailer/staff/:id/toggle */
+  toggle(id) {
+    return request(`${RETAILER_BASE}/staff/${id}/toggle`, { method: 'PATCH', auth: true });
+  },
+  /** DELETE /api/retailer/staff/:id */
+  remove(id) {
+    return request(`${RETAILER_BASE}/staff/${id}`, { method: 'DELETE', auth: true });
+  },
+};
+
 // ─── Session helpers ──────────────────────────────────────────────────────────
 export const session = {
   async save(token, user) {

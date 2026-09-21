@@ -169,6 +169,9 @@ export default function RegisterScreen({ navigation }) {
         throw new Error('Account created, but sign-in could not be completed. Please return to login.');
       }
       await session.save(regData.token, regData.user);
+      // Save company code to form state so Step 3 can display it
+      const code = regData.user?.company?.company_code || regData.user?.company_code || '';
+      if (code) setForm(f => ({ ...f, _companyCode: code }));
 
       const selectedDocuments = REGISTRATION_DOCUMENTS.reduce((selected, document) => {
         const file = documents[document.key];
@@ -206,12 +209,15 @@ export default function RegisterScreen({ navigation }) {
   // STEP 3 — Success Screen
   // ═══════════════════════════════════════════════════════════════
   if (step === 3) {
+    // Extract company code from the registered user data
+    const companyCode = form._companyCode || '';
+
     return (
       <View style={s.root}>
         <StatusBar barStyle="light-content" backgroundColor="#1A2340" />
         <SafeAreaView style={s.flex} edges={['top', 'bottom']}>
           <View style={s.successContainer}>
-            {/* Success animation area */}
+            {/* Success icon */}
             <View style={s.successIconWrap}>
               <View style={s.successIconCircle}>
                 <Ionicons name="checkmark-circle" size={80} color="#4ADE80" />
@@ -222,6 +228,20 @@ export default function RegisterScreen({ navigation }) {
             <Text style={s.successSubtitle}>
               Your business{form.companyName ? ` "${form.companyName.trim()}"` : ''} has been submitted for review.
             </Text>
+
+            {/* Unique Company Code card */}
+            {!!companyCode && (
+              <View style={s.codeCard}>
+                <View style={s.codeCardLeft}>
+                  <Ionicons name="barcode-outline" size={22} color="#F59E0B" />
+                  <View>
+                    <Text style={s.codeLabel}>Your Unique Company Code</Text>
+                    <Text style={s.codeHint}>Use this code to identify your account</Text>
+                  </View>
+                </View>
+                <Text style={s.codeValue}>{companyCode}</Text>
+              </View>
+            )}
 
             {/* Pending info card */}
             <View style={s.pendingCard}>
@@ -859,4 +879,17 @@ const s = StyleSheet.create({
   bulletText: { fontSize: 13, color: 'rgba(255,255,255,0.65)', flex: 1 },
 
   successBtn: { width: '100%' },
+
+  // Unique company code card
+  codeCard: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: 'rgba(245,158,11,0.12)', borderRadius: 14,
+    borderWidth: 1.5, borderColor: '#F59E0B',
+    paddingHorizontal: 16, paddingVertical: 14,
+    marginBottom: 16, width: '100%',
+  },
+  codeCardLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  codeLabel:   { fontSize: 12, fontWeight: '700', color: '#F59E0B' },
+  codeHint:    { fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 2 },
+  codeValue:   { fontSize: 20, fontWeight: '900', color: '#F59E0B', letterSpacing: 1, fontFamily: 'monospace' },
 });
