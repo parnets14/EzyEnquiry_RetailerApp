@@ -285,9 +285,6 @@ export const invoiceApi = {
 
 // ─── Payment API ──────────────────────────────────────────────────────────────
 export const paymentApi = {
-  list(params = {}) {
-    return request(`${RETAILER_BASE}/payments${toQuery(params)}`, { auth: true });
-  },
   // Initiate an online payment against an invoice → returns gateway order details.
   initiate(invoiceId, method = 'Online') {
     return request(`${RETAILER_BASE}/invoices/${invoiceId}/pay`, {
