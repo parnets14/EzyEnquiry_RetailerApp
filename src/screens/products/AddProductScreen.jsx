@@ -1,1141 +1,970 @@
 /**
- * AddProductScreen.jsx
+ * AddProductScreen.jsx  (Retailer app)
  *
- * 2-step wizard matching the admin panel ProductManagement page:
+ * Wholesaler-style stepped Add / Edit product flow — kept structurally
+ * identical to `wholesalerapp/src/screens/product/AddProductScreen.jsx` so
+ * staff moving between the two apps see the same form.
  *
- * STEP 1 — Select Category, Sub-Category (if available) and Brand.
- *           "Continue" is only enabled once those are chosen.
+ *   Step 1 — Select Category        (chips + inline create)
+ *   Step 2 — Sub-Category           (chips + inline create, only when the
+ *                                    chosen category actually has sub-categories)
+ *   Step 3 — Brand                  (chips + inline create)
+ *   Step 4 — Product Details        (name, code, category-driven dynamic fields)
+ *   Step 5 — Unit, Pricing & Stock
+ *   Step 6 — Images
  *
- * STEP 2 — Full product form with category-specific dynamic fields
- *           (tiles, granite, marble, blocks, sanitaryware, other).
+ * Step numbers are dynamic: when a category has no sub-categories the
+ * Sub-Category step is skipped and every later step shifts down by one,
+ * matching the wholesaler form's behaviour.
  *
- * Mirrors: EzyEnquiryCrm-frontend/src/pages/ProductManagement.jsx
+ * Category-specific values are stored in Product.attributes on the backend.
  */
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, StatusBar, TouchableOpacity,
-  KeyboardAvoidingView, Platform, Image, Switch, Alert, ActivityIndicator,
-  Modal, TouchableWithoutFeedback, TextInput as RNTextInput,
+  View, Text, StyleSheet, ScrollView, StatusBar,
+  TouchableOpacity, KeyboardAvoidingView, Platform,
+  Image, Alert, Modal, Pressable, TextInput as RNTextInput,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { launchImageLibrary } from 'react-native-image-picker';
 import { Colors } from '../../theme/colors';
-import { Typography } from '../../theme/typography';
-import { Spacing, BorderRadius, Shadows } from '../../theme/spacing';
-import TextInput from '../../components/common/TextInput';
-import PrimaryButton from '../../components/common/PrimaryButton';
+import { Shadows, Spacing } from '../../theme/spacing';
 import { myProductApi, catalogApi, mediaUrl } from '../../utils/api';
+import { fieldOptionsService } from '../../services/fieldOptionsService';
 import {
-  fieldsForType, matchCategoryType, labelForType,
-  calcSqftPerBox, CATEGORY_DEFAULT_UNIT,
-} from '../../config/productFieldSchema';
+  categoryTypeFromName, fieldsForType, CATEGORY_UNIT, UNIT_OPTIONS,
+} from '../../utils/categoryFields';
 
-// ─── Constants ────────────────────────────────────────────────
-const UNITS      = ['Sq Ft', 'Sq Mtr', 'Piece', 'Box', 'Nos'];
-const GST_OPTS   = ['0', '5', '12', '18', '28'];
-const SALE_TYPES = ['Regular Sale', 'B2B Sale', 'Export Sale', 'Project Sale'];
-const PROD_TYPES = ['Regular Product', 'Premium Product', 'Economy Product', 'Exclusive Product'];
 const MAX_IMAGES = 10;
-const DISC_FIELDS = new Set([
-  'retail_discount', 'dealer_discount', 'wholesale_discount', 'project_discount',
-]);
+const ORANGE     = Colors.primary;    // #F4500A
+const NAVY       = Colors.secondary;  // #1A2340
+const MUTED      = Colors.textSecondary;
+const BORDER     = Colors.border;
 
-const INITIAL_FORM = {
-  name: '', alias: '', code: '', description: '', hsn_code: '',
-  brand_name: '', category_name: '', sub_category_name: '',
-  unit: 'Box', gst_percent: '18',
-  purchase_rate: '', landing_cost: '', mrp: '',
-  retail_discount: '', retail_rate: '',
-  dealer_discount: '', dealer_rate: '',
-  wholesale_discount: '', wholesale_rate: '',
-  project_discount: '', project_rate: '',
-  min_selling_rate: '', min_stock_level: '', reorder_level: '',
-  sales_type: 'Regular Sale', product_type: 'Regular Product',
-  new_arrival: false, featured: false,
-  size: '', finish: '', color: '', surface: '', thickness: '', grade: '',
-  tile_type: '', application: '', anti_skid: '', origin: '', manufacturer: '',
-  design: '', collection: '', pcs_per_box: '', sqft_per_box: '', weight_per_box: '',
-  material: '', barcode: '',
-};
+const numOnly = (v) => String(v).replace(/[^0-9.]/g, '');
 
-// ─── Helpers ──────────────────────────────────────────────────
-function sanitizeDecimal(v) {
-  const c = String(v ?? '').replace(/[^0-9.]/g, '');
-  const d = c.indexOf('.');
-  if (d < 0) return c.replace(/^0+(?=\d)/, '');
-  return c.slice(0, d).replace(/^0+(?=\d)/, '') + '.' + c.slice(d + 1).replace(/\./g, '');
-}
-function sanitizeDiscount(v) {
-  const r = String(v ?? '').trim();
-  if (!r) return '';
-  const c = sanitizeDecimal(r);
-  const n = Number(c);
-  return Number.isFinite(n) && n > 100 ? '100' : c;
-}
-function discountFrom(mrp, rate) {
-  const m = Number(mrp), r = Number(rate);
-  if (!(m > 0) || !(r >= 0) || r > m) return '';
-  return ((1 - r / m) * 100).toFixed(2).replace(/\.00$/, '');
-}
-function getImageUrls(p = {}) {
-  const raw = p._raw || p;
-  return Array.isArray(raw.image_urls) ? raw.image_urls.filter(Boolean) : [];
-}
-function productToForm(p = {}) {
-  const raw = p._raw || p;
-  const sp = raw.specs || raw, pk = raw.packing || raw;
-  const pr = raw.prices || raw, st = raw.stock || raw;
-  const cl = raw.classification || raw, fl = raw.flags || {};
-  const mrp = pr.mrp ?? raw.mrp;
-  const rR = pr.retail_price ?? raw.retail_price;
-  const dR = pr.dealer_price ?? raw.dealer_price;
-  const wR = pr.wholesale_rate ?? raw.wholesale_rate;
-  const pR = pr.project_rate ?? raw.project_rate;
-  return {
-    ...INITIAL_FORM,
-    name: raw.name || '', alias: raw.alias || '',
-    code: raw.code || p.productCode || '',
-    description: raw.description || '',
-    hsn_code: sp.hsn_code || raw.hsn_code || '',
-    brand_name: raw.brand?.name || raw.brand_id?.name || p.brand || '',
-    category_name: raw.category?.name || raw.category_id?.name || p.category || '',
-    sub_category_name: raw.sub_category?.name || raw.sub_category_id?.name || p.subCategory || '',
-    unit: raw.unit || 'Box',
-    gst_percent: String(raw.gst_percent ?? '18'),
-    purchase_rate: String(pr.purchase_price ?? raw.purchase_price ?? ''),
-    landing_cost: String(pr.landing_cost ?? raw.landing_cost ?? ''),
-    mrp: String(mrp ?? ''),
-    retail_discount: discountFrom(mrp, rR), retail_rate: String(rR ?? ''),
-    dealer_discount: discountFrom(mrp, dR), dealer_rate: String(dR ?? ''),
-    wholesale_discount: discountFrom(mrp, wR), wholesale_rate: String(wR ?? ''),
-    project_discount: discountFrom(mrp, pR), project_rate: String(pR ?? ''),
-    min_selling_rate: String(pr.min_selling_rate ?? raw.min_selling_rate ?? ''),
-    min_stock_level: String(st.min_stock_level ?? raw.min_stock_level ?? ''),
-    reorder_level: String(st.reorder_level ?? raw.reorder_level ?? ''),
-    sales_type: cl.sales_type || raw.sales_type || 'Regular Sale',
-    product_type: cl.product_type || raw.product_type || 'Regular Product',
-    new_arrival: !!(fl.new_arrival ?? raw.new_arrival),
-    featured: !!(fl.featured ?? raw.featured),
-    size: sp.size || raw.size || '', finish: sp.finish || raw.finish || '',
-    color: sp.color || raw.color || '', surface: sp.surface || raw.surface || '',
-    thickness: sp.thickness || raw.thickness || '', grade: sp.grade || raw.grade || '',
-    tile_type: sp.tile_type || raw.tile_type || '',
-    application: sp.application || raw.application || '',
-    anti_skid: sp.anti_skid || raw.anti_skid || '',
-    origin: sp.origin || raw.origin || '',
-    manufacturer: sp.manufacturer || raw.manufacturer || '',
-    barcode: sp.barcode || raw.barcode || '',
-    design: sp.design || raw.design || '',
-    collection: sp.collection || raw.collection || '',
-    pcs_per_box: String(pk.pcs_per_box ?? raw.pcs_per_box ?? ''),
-    sqft_per_box: String(pk.sqft_per_box ?? raw.sqft_per_box ?? ''),
-    weight_per_box: String(pk.weight_per_box ?? raw.weight_per_box ?? ''),
-    material: sp.material || raw.material || '',
-  };
-}
-
-// ─── Shared UI components ─────────────────────────────────────
-const SH = ({ title }) => (
-  <View style={s.section}>
-    <View style={s.sectionBar} />
-    <Text style={s.sectionTitle}>{title}</Text>
-  </View>
-);
-
-const TR = ({ label, value, onChange, last }) => (
-  <View style={[s.toggleRow, !last && s.toggleBorder]}>
-    <Text style={s.toggleLabel}>{label}</Text>
-    <Switch value={value} onValueChange={onChange}
-      trackColor={{ true: Colors.primary, false: Colors.border }} thumbColor="#FFF" />
-  </View>
-);
-
-const PDR = ({ label, discount, rate, onD, onR }) => (
-  <View style={s.priceRow}>
-    <View style={s.priceCol}>
-      <TextInput label={`${label} Disc %`} value={discount} onChangeText={onD}
-        placeholder="0" keyboardType="decimal-pad" helperText="0–100 %" />
-    </View>
-    <View style={s.priceCol}>
-      <TextInput label={`${label} Rate`} value={rate} onChangeText={onR}
-        placeholder="0.00" keyboardType="decimal-pad" helperText="Auto-calc, editable" />
-    </View>
-  </View>
-);
-
-// ─── Bottom-sheet select ──────────────────────────────────────
-function SelField({ label, value, options, onChange, required, placeholder = 'Select' }) {
-  const [vis, setVis] = useState(false);
-  const norm = (options || []).map(o => typeof o === 'string' ? { value: o, label: o } : o);
-  const sel = norm.find(o => o.value === value);
+// ── Section label (numbered step, wholesaler style) ───────────
+function StepLabel({ n, text }) {
   return (
-    <View style={s.selWrap}>
-      <Text style={s.selLabel}>
-        {label}{required ? <Text style={{ color: Colors.error }}> *</Text> : null}
-      </Text>
-      <TouchableOpacity style={s.selTrigger} onPress={() => setVis(true)} activeOpacity={0.8}>
-        <Text style={[s.selVal, !sel && s.selPH]} numberOfLines={1}>
-          {sel?.label || placeholder}
-        </Text>
-        <Ionicons name="chevron-down" size={17} color={Colors.textTertiary} />
-      </TouchableOpacity>
-      <Modal visible={vis} transparent animationType="slide" onRequestClose={() => setVis(false)}>
-        <TouchableWithoutFeedback onPress={() => setVis(false)}>
-          <View style={s.overlay}>
-            <TouchableWithoutFeedback>
-              <View style={s.sheet}>
-                <View style={s.sheetHandle} />
-                <View style={s.sheetHead}>
-                  <Text style={s.sheetTitle}>{label}</Text>
-                  {value && !required && (
-                    <TouchableOpacity onPress={() => { onChange(''); setVis(false); }} style={s.clearBtn}>
-                      <Text style={s.clearTxt}>Clear</Text>
-                    </TouchableOpacity>
-                  )}
-                  <TouchableOpacity onPress={() => setVis(false)} style={s.closeBtn}>
-                    <Ionicons name="close" size={21} color={Colors.textSecondary} />
-                  </TouchableOpacity>
-                </View>
-                <ScrollView style={s.sheetList}>
-                  {norm.map(o => {
-                    const act = o.value === value;
-                    return (
-                      <TouchableOpacity key={o.value}
-                        style={[s.sheetOpt, act && s.sheetOptAct]}
-                        onPress={() => { onChange(o.value); setVis(false); }}>
-                        <Text style={[s.sheetOptTxt, act && s.sheetOptTxtAct]}>{o.label}</Text>
-                        {act && <Ionicons name="checkmark-circle" size={19} color={Colors.primary} />}
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            </TouchableWithoutFeedback>
-          </View>
-        </TouchableWithoutFeedback>
-      </Modal>
-    </View>
-  );
-}
-
-// ─── Searchable catalog select with "add new" ─────────────────
-function CatalogSelect({
-  label, items = [], selectedId, onSelect,
-  placeholder, disabled, allowNew, onNew, freeValue = '',
-}) {
-  const [vis, setVis] = useState(false);
-  const [q, setQ] = useState('');
-  const sel = items.find(i => i._id === selectedId);
-  const display = sel?.name || freeValue || '';
-  const filtered = q.trim()
-    ? items.filter(i => i.name.toLowerCase().includes(q.toLowerCase()))
-    : items;
-  const showNew = allowNew && q.trim() &&
-    !items.some(i => i.name.toLowerCase() === q.toLowerCase());
-
-  return (
-    <View style={s.selWrap}>
-      <Text style={s.selLabel}>{label}</Text>
-      <TouchableOpacity
-        style={[s.selTrigger, disabled && s.selTriggerDisabled]}
-        onPress={() => { if (!disabled) { setQ(''); setVis(true); } }}
-        activeOpacity={disabled ? 1 : 0.8}>
-        <Text style={[s.selVal, !display && s.selPH]} numberOfLines={1}>
-          {display || placeholder}
-        </Text>
-        <Ionicons name="chevron-down" size={17} color={Colors.textTertiary} />
-      </TouchableOpacity>
-      {disabled && (
-        <Text style={s.disabledHint}>Select a category first</Text>
-      )}
-      <Modal visible={vis && !disabled} transparent animationType="slide"
-        onRequestClose={() => setVis(false)}>
-        <TouchableWithoutFeedback onPress={() => setVis(false)}>
-          <View style={s.overlay}>
-            <TouchableWithoutFeedback>
-              <View style={s.sheet}>
-                <View style={s.sheetHandle} />
-                <View style={s.sheetHead}>
-                  <Text style={s.sheetTitle}>{label}</Text>
-                  {display ? (
-                    <TouchableOpacity style={s.clearBtn}
-                      onPress={() => { onSelect(''); onNew && onNew(''); setVis(false); }}>
-                      <Text style={s.clearTxt}>Clear</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                  <TouchableOpacity onPress={() => setVis(false)} style={s.closeBtn}>
-                    <Ionicons name="close" size={21} color={Colors.textSecondary} />
-                  </TouchableOpacity>
-                </View>
-                <View style={s.searchBar}>
-                  <Ionicons name="search-outline" size={15} color={Colors.textTertiary} />
-                  <RNTextInput style={s.searchInput} value={q} onChangeText={setQ} autoFocus
-                    placeholder={`Search or type new ${label.toLowerCase()}…`}
-                    placeholderTextColor={Colors.textTertiary} />
-                  {q.length > 0 && (
-                    <TouchableOpacity onPress={() => setQ('')}>
-                      <Ionicons name="close-circle" size={15} color={Colors.textTertiary} />
-                    </TouchableOpacity>
-                  )}
-                </View>
-                <ScrollView style={s.sheetList}>
-                  {showNew && (
-                    <TouchableOpacity style={s.newRow}
-                      onPress={() => { onNew && onNew(q.trim()); setVis(false); setQ(''); }}>
-                      <View style={s.newIcon}>
-                        <Ionicons name="add" size={15} color={Colors.primary} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={s.newLbl}>Add new {label.toLowerCase()}</Text>
-                        <Text style={s.newVal}>"{q.trim()}"</Text>
-                      </View>
-                    </TouchableOpacity>
-                  )}
-                  {filtered.map(item => {
-                    const act = item._id === selectedId;
-                    return (
-                      <TouchableOpacity key={item._id}
-                        style={[s.sheetOpt, act && s.sheetOptAct]}
-                        onPress={() => { onSelect(item._id); setVis(false); setQ(''); }}>
-                        <Text style={[s.sheetOptTxt, act && s.sheetOptTxtAct]}>{item.name}</Text>
-                        {item.code ? <Text style={s.itemCode}>{item.code}</Text> : null}
-                        {act && <Ionicons name="checkmark-circle" size={19} color={Colors.primary} />}
-                      </TouchableOpacity>
-                    );
-                  })}
-                  {filtered.length === 0 && !showNew && (
-                    <View style={{ padding: 24, alignItems: 'center' }}>
-                      <Text style={{ color: Colors.textTertiary, fontSize: 13 }}>
-                        {q.trim()
-                          ? `No ${label.toLowerCase()} found. Type to add.`
-                          : `No ${label.toLowerCase()}s yet.`}
-                      </Text>
-                    </View>
-                  )}
-                </ScrollView>
-              </View>
-            </TouchableWithoutFeedback>
-          </View>
-        </TouchableWithoutFeedback>
-      </Modal>
-    </View>
-  );
-}
-
-// ─── CollapsibleSpec ──────────────────────────────────────────
-// Shows a section heading with an "Add" button.
-// Tapping "Add" / "Edit" expands the fields inline below the heading.
-// Tapping "Done" collapses them again.
-function CollapsibleSpec({ title, fields, form, attrs, set, setAttr }) {
-  const [open, setOpen] = useState(false);
-
-  const filledCount = fields.filter(fd => {
-    const v = fd.storeIn === 'column' ? form[fd.key] : attrs[fd.key];
-    return v && String(v).trim() !== '';
-  }).length;
-
-  return (
-    <View style={{ marginBottom: 4 }}>
-      {/* Header row — always visible */}
-      <View style={s.collapseHeader}>
-        <View style={s.collapseLeft}>
-          <View style={s.sectionBar} />
-          <Text style={s.sectionTitle}>{title}</Text>
-          {filledCount > 0 && !open && (
-            <View style={s.collapseCount}>
-              <Text style={s.collapseCountTxt}>{filledCount} filled</Text>
-            </View>
-          )}
-        </View>
-        <TouchableOpacity
-          style={[s.collapseBtn, open && s.collapseBtnOpen]}
-          onPress={() => setOpen(v => !v)}
-          activeOpacity={0.8}
-        >
-          <Ionicons
-            name={open ? 'checkmark-done-outline' : (filledCount > 0 ? 'create-outline' : 'add')}
-            size={14}
-            color="#FFF"
-          />
-          <Text style={s.collapseBtnTxt}>
-            {open ? 'Done' : filledCount > 0 ? 'Edit' : 'Add'}
-          </Text>
-        </TouchableOpacity>
+    <View style={s.stepRow}>
+      <View style={s.stepDot}>
+        <Text style={s.stepDotTxt}>{n}</Text>
       </View>
+      <Text style={s.stepTxt}>{text}</Text>
+      <View style={s.stepLine} />
+    </View>
+  );
+}
 
-      {/* Expandable fields */}
-      {open && (
-        <View style={s.collapseBody}>
-          <View style={s.grid}>
-            {fields.map(fd => {
-              const fullW = fd.type !== 'select';
-              const val = fd.storeIn === 'column'
-                ? (form[fd.key] || '')
-                : (attrs[fd.key] || '');
-              const change = fd.storeIn === 'column'
-                ? v => {
-                    set(fd.key, fd.type === 'number' ? sanitizeDecimal(v) : v);
-                    if (fd.key === 'size' || fd.key === 'pcs_per_box') {
-                      const sq = calcSqftPerBox(
-                        fd.key === 'size' ? v : form.size,
-                        fd.key === 'pcs_per_box' ? v : form.pcs_per_box,
-                      );
-                      if (sq) set('sqft_per_box', sq);
-                    }
-                  }
-                : v => setAttr(fd.key, v);
-              return (
-                <View key={fd.key} style={fullW ? s.gFull : s.g2}>
-                  <DynField fd={fd} value={val} onChange={change} />
-                </View>
-              );
-            })}
-          </View>
-
-          {/* Inline Done button at bottom of fields */}
+// ── Chip row (category / sub / brand) ────────────────────────
+function ChipRow({ items, activeId, onPick }) {
+  if (!items.length) return null;
+  return (
+    <View style={s.chipWrap}>
+      {items.map(item => {
+        const on = activeId === (item._id || item.id);
+        return (
           <TouchableOpacity
-            style={s.collapseDoneBtn}
-            onPress={() => setOpen(false)}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="checkmark" size={15} color="#FFF" />
-            <Text style={s.collapseDoneTxt}>Done</Text>
+            key={item._id || item.id}
+            style={[s.chip, on && s.chipOn]}
+            onPress={() => onPick(item)}
+            activeOpacity={0.8}>
+            <Text style={[s.chipTxt, on && s.chipTxtOn]}>{item.name}</Text>
           </TouchableOpacity>
-        </View>
-      )}
+        );
+      })}
     </View>
   );
 }
 
-// ─── Dynamic spec field ───────────────────────────────────────
-function DynField({ fd, value, onChange }) {
-  const lbl = fd.unit ? `${fd.label} (${fd.unit})` : fd.label;
-  if (fd.type === 'select') {
-    return (
-      <SelField label={lbl} required={fd.required} value={value || ''}
-        options={fd.options || []} onChange={onChange}
-        placeholder={fd.placeholder || `Select ${fd.label}…`} />
-    );
-  }
+// ── Inline "Add new …" button ────────────────────────────────
+function AddNewBtn({ label, onPress }) {
   return (
-    <TextInput label={lbl} required={fd.required} value={value || ''}
-      onChangeText={onChange} placeholder={fd.placeholder || ''}
-      keyboardType={fd.type === 'number' ? 'decimal-pad' : 'default'} />
+    <TouchableOpacity style={s.addNewBtn} onPress={onPress} activeOpacity={0.8}>
+      <Ionicons name="add-circle-outline" size={16} color={ORANGE} />
+      <Text style={s.addNewTxt}>Add new {label}</Text>
+    </TouchableOpacity>
   );
 }
 
-// ═══════════════════════════════════════════════════════════════
-// STEP 1 component — Category / Sub-Category / Brand selector
-// ═══════════════════════════════════════════════════════════════
-function Step1({
-  cats, subs, brands,
-  catId, subId, brandId,
-  onCatId, onSubId, onBrandId,
-  catFreeText, brandFreeText,
-  onCatFreeText, onBrandFreeText,
-  onContinue, onCancel,
-  typeOverride, onTypeOverride,
-  bottomInset = 14,
-}) {
-  const catSel     = cats.find(c => c._id === catId);
-  const catName    = catSel?.name || catFreeText || '';
-  const brandSel   = brands.find(b => b._id === brandId);
-  const brandName  = brandSel?.name || brandFreeText || '';
-  const hasSubs    = subs.length > 0;
-  const subSel     = subs.find(s => s._id === subId);
+// ── Field label ───────────────────────────────────────────────
+function FL({ children }) {
+  return <Text style={s.fieldLabel}>{children}</Text>;
+}
 
-  // Requirement mirror of admin panel:
-  // Category + Brand required; Sub-Category only when category has subs
-  const selectionComplete = !!catName && !!brandName && (!hasSubs || !!subId);
-
-  // Use manual override if set, otherwise auto-detect from names
-  const catType = typeOverride || matchCategoryType(catName, subSel?.name || '');
-
+// ── Text / number input ───────────────────────────────────────
+function FInput({ label, value, onChangeText, placeholder, keyboardType, error, half, multiline, required }) {
   return (
-    <View style={{ flex: 1 }}>
-      <ScrollView contentContainerStyle={s.step1Scroll} keyboardShouldPersistTaps="handled">
+    <View style={[s.fieldWrap, half && s.halfCol]}>
+      {label ? <FL>{label}{required ? ' *' : ''}</FL> : null}
+      <RNTextInput
+        style={[s.input, error && s.inputErr, multiline && { height: 80, textAlignVertical: 'top', paddingTop: 10 }]}
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder || ''}
+        placeholderTextColor={Colors.textTertiary}
+        keyboardType={keyboardType || 'default'}
+        multiline={multiline}
+        autoCapitalize="none"
+      />
+      {!!error && <Text style={s.errTxt}>{error}</Text>}
+    </View>
+  );
+}
 
-        {/* Step label */}
-        <View style={s.stepLabel}>
-          <View style={s.stepDot}><Text style={s.stepDotTxt}>1</Text></View>
-          <Text style={s.stepTxt}>SELECT CATEGORY, SUB-CATEGORY & BRAND</Text>
-        </View>
-
-        {/* Category */}
-        <CatalogSelect
-          label="Category *"
-          items={cats}
-          selectedId={catId}
-          onSelect={id => { onCatId(id); onSubId(''); }}
-          placeholder="Search categories…"
-          allowNew
-          onNew={n => { onCatId(''); onCatFreeText(n); onSubId(''); }}
-          freeValue={!catId ? catFreeText : ''}
-        />
-
-        {/* Sub-Category — only when category has subs */}
-        <CatalogSelect
-          label="Sub-Category"
-          items={subs}
-          selectedId={subId}
-          onSelect={onSubId}
-          placeholder={hasSubs ? 'Select sub-category…' : 'No sub-categories yet'}
-          disabled={!catName}
-          allowNew
-          onNew={n => { onSubId(''); }}
-          freeValue=""
-        />
-
-        {/* Brand */}
-        <CatalogSelect
-          label="Brand *"
-          items={brands}
-          selectedId={brandId}
-          onSelect={onBrandId}
-          placeholder="Search brands…"
-          allowNew
-          onNew={n => { onBrandId(''); onBrandFreeText(n); }}
-          freeValue={!brandId ? brandFreeText : ''}
-        />
-
-        {/* Info hint — matches admin panel */}
-        {!selectionComplete && (
-          <View style={s.step1Hint}>
-            <Ionicons name="information-circle-outline" size={15} color={Colors.primary} />
-            <Text style={s.step1HintTxt}>
-              Please select <Text style={{ fontWeight: '700' }}>Category</Text> and{' '}
-              <Text style={{ fontWeight: '700' }}>Brand</Text> to continue adding the product details.
-            </Text>
-          </View>
-        )}
-
-        {/* Product Type Selection — shown once category is picked */}
-        {!!catName && (
-          <View style={s.typeSection}>
-            {/* Heading */}
-            <View style={s.typeSectionHead}>
-              <Text style={s.typeSectionTitle}>Product Type</Text>
-              <Text style={s.typeSectionSub}>
-                Auto-detected from category · tap to change
-              </Text>
-            </View>
-
-            {/* Type cards */}
-            <View style={s.typeCardRow}>
-              {[
-                { key: 'tiles',        label: 'Tiles',        icon: 'grid-outline',    color: '#2980B9', bg: '#EBF5FB' },
-                { key: 'granite',      label: 'Granite',      icon: 'diamond-outline', color: '#7D6608', bg: '#FEF9E7' },
-                { key: 'marble',       label: 'Marble',       icon: 'ellipse-outline', color: '#8E44AD', bg: '#F5EEF8' },
-                { key: 'blocks',       label: 'Blocks',       icon: 'cube-outline',    color: '#E67E22', bg: '#FDF0E4' },
-                { key: 'sanitaryware', label: 'Sanitary',     icon: 'water-outline',   color: '#16A085', bg: '#E8F8F5' },
-                { key: 'other',        label: 'General',      icon: 'apps-outline',    color: '#566573', bg: '#F2F3F4' },
-              ].map(t => {
-                const active = catType === t.key;
-                return (
-                  <TouchableOpacity
-                    key={t.key}
-                    style={[
-                      s.typeCard,
-                      { borderColor: active ? t.color : Colors.border },
-                      active && { backgroundColor: t.bg },
-                    ]}
-                    onPress={() => onTypeOverride(t.key)}
-                    activeOpacity={0.8}
-                  >
-                    <Ionicons
-                      name={t.icon}
-                      size={13}
-                      color={active ? t.color : Colors.textTertiary}
-                    />
-                    <Text style={[s.typeCardLabel, active && { color: t.color, fontWeight: '800' }]}>
-                      {t.label}
-                    </Text>
-                    {active && (
-                      <View style={[s.typeCardCheck, { backgroundColor: t.color }]}>
-                        <Ionicons name="checkmark" size={8} color="#FFF" />
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-        )}
-      </ScrollView>
-
-      {/* Footer buttons */}
-      <View style={[s.step1Footer, { paddingBottom: bottomInset }]}>
-        <TouchableOpacity style={s.cancelBtn} onPress={onCancel}>
-          <Text style={s.cancelTxt}>Cancel</Text>
-        </TouchableOpacity>
+// ── Select field (tap to open modal, + to add an option) ─────
+function FSelect({ label, value, onPress, onAdd, error, half, required }) {
+  return (
+    <View style={[s.fieldWrap, half && s.halfCol]}>
+      {label ? <FL>{label}{required ? ' *' : ''}</FL> : null}
+      <View style={s.selectRow}>
         <TouchableOpacity
-          style={[s.continueBtn, !selectionComplete && s.continueBtnDisabled]}
-          onPress={selectionComplete ? onContinue : undefined}
-          activeOpacity={selectionComplete ? 0.85 : 1}>
-          <Text style={[s.continueTxt, !selectionComplete && s.continueTxtDisabled]}>
-            Continue to Details
+          style={[s.selectBox, { flex: 1 }, error && s.inputErr]}
+          onPress={onPress}
+          activeOpacity={0.8}>
+          <Text style={[s.selectTxt, !value && { color: Colors.textTertiary }]}>
+            {value || `Select ${label}`}
           </Text>
-          <Ionicons name="arrow-forward" size={16}
-            color={selectionComplete ? '#FFF' : Colors.textTertiary} />
+          <Ionicons name="chevron-down" size={16} color={MUTED} />
+        </TouchableOpacity>
+        <TouchableOpacity style={s.optAddBtn} onPress={onAdd} activeOpacity={0.8}>
+          <Ionicons name="add" size={20} color="#FFF" />
         </TouchableOpacity>
       </View>
+      {!!error && <Text style={s.errTxt}>{error}</Text>}
     </View>
   );
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Main screen
+// Main Screen
 // ═══════════════════════════════════════════════════════════════
 export default function AddProductScreen({ navigation, route }) {
-  const editProduct = route?.params?.mode === 'edit' ? route.params.product : null;
-  const productId   = editProduct?.id || editProduct?._raw?.id;
-  const isEdit      = Boolean(productId);
+  const insets  = useSafeAreaInsets();
+  const editing = route?.params?.mode === 'edit'
+    ? route.params.product
+    : (route?.params?.product || null);
+  const raw       = editing?._raw || editing || null;
+  const productId = editing?.id || editing?._id || raw?.id || raw?._id || null;
+  const isEdit    = Boolean(productId);
 
-  // Step: 1 = selection, 2 = full form
-  const [step, setStep] = useState(isEdit ? 2 : 1);
+  const specs   = raw?.specs   || raw || {};
+  const packing = raw?.packing || raw || {};
+  const prices  = raw?.prices  || raw || {};
 
-  // Form state
-  const [form,     setForm]     = useState(() => isEdit ? productToForm(editProduct) : { ...INITIAL_FORM });
-  const [exImgs,   setExImgs]   = useState(() => isEdit ? getImageUrls(editProduct) : []);
-  const [newImgs,  setNewImgs]  = useState([]);
-  const [saving,   setSaving]   = useState(false);
-  const [error,    setError]    = useState('');
-  const [ready,    setReady]    = useState(!isEdit);
-  const [fetching, setFetching] = useState(isEdit);
-  const [attrs,    setAttrs]    = useState({});
-
-  // Catalog state
-  const [cats,        setCats]        = useState([]);
-  const [subs,        setSubs]        = useState([]);
+  // ── Taxonomy ──────────────────────────────────────────────
+  const [categories,  setCategories]  = useState([]);
   const [brands,      setBrands]      = useState([]);
-  const [catId,       setCatId]       = useState('');
-  const [subId,       setSubId]       = useState('');
-  const [brandId,     setBrandId]     = useState('');
-  const [catFreeText, setCatFreeText] = useState('');
-  const [brandFreeText, setBrandFreeText] = useState('');
-  // Manual product type override (user can correct auto-detection in Step 1)
-  const [typeOverride, setTypeOverride] = useState('');
+  const [taxLoading,  setTaxLoading]  = useState(true);
 
-  // Category type for dynamic fields — override beats auto-detection
-  const catSel   = cats.find(c => c._id === catId);
-  const subSel   = subs.find(s => s._id === subId);
-  const catName  = catSel?.name  || catFreeText  || form.category_name  || '';
-  const brandName= brands.find(b => b._id === brandId)?.name || brandFreeText || form.brand_name || '';
-  const catType  = typeOverride || matchCategoryType(catName, subSel?.name || form.sub_category_name || '');
-  const dynFields = fieldsForType(catType);
+  // Selection
+  const [category,    setCategory]    = useState(null);  // { _id, name, sub_categories }
+  const [subCategory, setSubCategory] = useState(null);  // { _id, name }
+  const [brand,       setBrand]       = useState(null);  // { _id, name }
 
-  // ── Load catalog ──────────────────────────────────────────
+  // Category-specific attribute values
+  const [attrs, setAttrs] = useState(raw?.attributes || {});
+  const [errors, setErrors] = useState({});
+  const setAttr = (k, v) => { setAttrs(a => ({ ...a, [k]: v })); setErrors(e => ({ ...e, [k]: null })); };
+
+  // Common fields
+  const [name,     setName]     = useState(raw?.name || '');
+  const [unit,     setUnit]     = useState(raw?.unit || 'Sq Ft');
+  const [desc,     setDesc]     = useState(raw?.description || '');
+  const [prices2,  setPrices2]  = useState({
+    purchase_price: prices.purchase_price != null ? String(prices.purchase_price) : '',
+    selling_price:  prices.selling_price  != null ? String(prices.selling_price)  : (raw?.retail_rate ? String(raw.retail_rate) : ''),
+    wholesale_rate: prices.wholesale_rate != null ? String(prices.wholesale_rate) : '',
+    mrp:            prices.mrp            != null ? String(prices.mrp)            : '',
+    gst_percent:    raw?.gst_percent      != null ? String(raw.gst_percent)       : '18',
+    opening_stock:  raw?.opening_stock    != null ? String(raw.opening_stock)     : '',
+    hsn_code:       specs.hsn_code || '',
+    pcs_per_box:    packing.pcs_per_box   != null ? String(packing.pcs_per_box)   : '',
+    sqft_per_box:   packing.sqft_per_box  != null ? String(packing.sqft_per_box)  : '',
+    code:           raw?.code || '',
+  });
+  const setPrice = (k, v) => setPrices2(p => ({ ...p, [k]: v }));
+
+  // Images
+  const [imageUrls, setImageUrls] = useState(
+    Array.isArray(raw?.image_urls) ? raw.image_urls.filter(Boolean) : []
+  );
+  const [newImgs, setNewImgs] = useState([]);
+
+  // UI state
+  const [saving,    setSaving]   = useState(false);
+  const [activeModal, setModal]  = useState(null); // 'unit' | 'select' | 'newCat' | 'newSub' | 'newBrand'
+  const [selectField, setSelectField] = useState(null);
+  const [modalInput,  setModalInput]  = useState('');
+  const [modalSaving, setModalSaving] = useState(false);
+
+  // Custom dropdown options the user has added (persisted), keyed by field key.
+  const [customOptions, setCustomOptions] = useState({});
+  const [hiddenOptions, setHiddenOptions] = useState({}); // built-in options the user removed
+  const [optModalField, setOptModalField] = useState(null); // field def when adding a new option
+  const [optInput, setOptInput] = useState('');
+
+  // ── Load persisted custom options ─────────────────────────
   useEffect(() => {
-    Promise.all([catalogApi.categories(), catalogApi.brands()])
-      .then(([cr, br]) => {
-        setCats(cr?.data || cr || []);
-        setBrands(br?.data || br || []);
-      })
-      .catch(() => {});
+    fieldOptionsService.all().then(map => {
+      const { __hidden__ = {}, ...custom } = map || {};
+      setCustomOptions(custom);
+      setHiddenOptions(__hidden__);
+    }).catch(() => {});
   }, []);
 
-  // ── Sub-categories when catId changes ─────────────────────
-  useEffect(() => {
-    if (!catId) { setSubs([]); return; }
-    catalogApi.subCategories(catId)
-      .then(r => setSubs(r?.data || r || []))
-      .catch(() => setSubs([]));
-    // Reset manual type override when category changes so auto-detect re-runs
-    setTypeOverride('');
-  }, [catId]);
-
-  // ── Sync IDs → form name fields ───────────────────────────
-  useEffect(() => {
-    if (catSel) setForm(f => ({ ...f, category_name: catSel.name }));
-    else if (catFreeText) setForm(f => ({ ...f, category_name: catFreeText }));
-  }, [catId, catFreeText, catSel]);
-
-  useEffect(() => {
-    if (subSel) setForm(f => ({ ...f, sub_category_name: subSel.name }));
-  }, [subId, subSel]);
-
-  useEffect(() => {
-    const b = brands.find(x => x._id === brandId);
-    if (b) setForm(f => ({ ...f, brand_name: b.name }));
-    else if (brandFreeText) setForm(f => ({ ...f, brand_name: brandFreeText }));
-  }, [brandId, brandFreeText, brands]);
-
-  // Auto-set unit from category type
-  useEffect(() => {
-    if (catName) setForm(f => ({ ...f, unit: CATEGORY_DEFAULT_UNIT[catType] || f.unit }));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catType]);
-
-  // ── Load existing product for edit ────────────────────────
-  useEffect(() => {
-    if (!isEdit) return;
-    let active = true;
-    setReady(false); setFetching(true);
-    myProductApi.get(productId)
-      .then(p => {
-        if (!active || !p) return;
-        setForm(productToForm(p));
-        setExImgs(getImageUrls(p));
-        const raw = p._raw || p;
-        const cId = String(raw.category_id?._id    || raw.category_id    || '');
-        const sId = String(raw.sub_category_id?._id || raw.sub_category_id || '');
-        const bId = String(raw.brand_id?._id        || raw.brand_id        || '');
-        if (cId) setCatId(cId);
-        if (sId) setSubId(sId);
-        if (bId) setBrandId(bId);
-        setAttrs(raw.attributes || {});
-        setReady(true); setError('');
-      })
-      .catch(e => { if (active) setError(e.message || 'Could not load product.'); })
-      .finally(() => { if (active) setFetching(false); });
-    return () => { active = false; };
-  }, [isEdit, productId]);
-
-  // ── Form helpers ──────────────────────────────────────────
-  const set = useCallback((key, value) => {
-    setForm(cur => {
-      const v = DISC_FIELDS.has(key) ? sanitizeDiscount(value) : value;
-      const next = { ...cur, [key]: v };
-      if (key === 'size' || key === 'pcs_per_box') {
-        const sq = calcSqftPerBox(next.size, next.pcs_per_box);
-        if (sq) next.sqft_per_box = sq;
-      }
-      [
-        ['retail_discount', 'retail_rate'],
-        ['dealer_discount', 'dealer_rate'],
-        ['wholesale_discount', 'wholesale_rate'],
-        ['project_discount', 'project_rate'],
-      ].forEach(([df, rf]) => {
-        if (key === df || key === 'mrp') {
-          const m = parseFloat(next.mrp), d = parseFloat(next[df]);
-          if (m > 0 && d >= 0 && next[df] !== '') next[rf] = (m * (1 - d / 100)).toFixed(2);
-        }
-      });
-      return next;
+  // Merge built-in options with the user's custom ones, minus any hidden defaults.
+  const optionsFor = (f) => {
+    const base   = Array.isArray(f.options) ? f.options : [];
+    const custom = customOptions[f.key] || [];
+    const hidden = (hiddenOptions[f.key] || []).map(x => String(x).toLowerCase());
+    const seen = new Set();
+    return [...base, ...custom].filter(o => {
+      const k = String(o).toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return !hidden.includes(k);
     });
-    setError('');
-  }, []);
+  };
 
-  const setAttr = (key, value) => setAttrs(p => ({ ...p, [key]: value }));
+  const addCustomOption = async () => {
+    const v = optInput.trim();
+    if (!v || !optModalField) return;
+    const list = await fieldOptionsService.add(optModalField.key, v);
+    setCustomOptions(prev => ({ ...prev, [optModalField.key]: list }));
+    setAttr(optModalField.key, v);   // auto-select the newly added option
+    setOptInput('');
+    setOptModalField(null);
+  };
 
+  const isCustomOption = (f, opt) =>
+    (customOptions[f.key] || []).some(x => String(x).toLowerCase() === String(opt).toLowerCase());
+
+  // Delete any option: custom → remove from storage; built-in default → hide it.
+  const deleteOption = async (f, opt) => {
+    if (isCustomOption(f, opt)) {
+      const list = await fieldOptionsService.remove(f.key, opt);
+      setCustomOptions(prev => ({ ...prev, [f.key]: list }));
+    } else {
+      const list = await fieldOptionsService.hide(f.key, opt);
+      setHiddenOptions(prev => ({ ...prev, [f.key]: list }));
+    }
+    if (String(attrs[f.key] ?? '').toLowerCase() === String(opt).toLowerCase()) setAttr(f.key, '');
+  };
+
+  // ── Load taxonomy ─────────────────────────────────────────
+  const loadTaxonomy = async () => {
+    setTaxLoading(true);
+    try {
+      const [catRes, brandRes] = await Promise.all([
+        catalogApi.categories(),
+        catalogApi.brands(),
+      ]);
+      const cats   = catRes?.data  || catRes  || [];
+      const brnds  = brandRes?.data || brandRes || [];
+      setCategories(Array.isArray(cats)  ? cats  : []);
+      setBrands(    Array.isArray(brnds) ? brnds : []);
+      return { cats, brnds };
+    } catch {
+      setCategories([]);
+      setBrands([]);
+      return { cats: [], brnds: [] };
+    } finally {
+      setTaxLoading(false);
+    }
+  };
+
+  useEffect(() => { loadTaxonomy(); }, []);
+
+  // Pre-normalise the edit payload's category/sub/brand identifiers once, so the
+  // pre-select effect below depends on stable primitives instead of the whole
+  // `raw` object (which is rebuilt on every render).
+  const editRefs = useMemo(() => ({
+    categoryName: raw?.category?.name    || raw?.category_name    || editing?.category    || '',
+    categoryId:   raw?.category_id       || raw?.category?._id    || null,
+    subName:      raw?.sub_category?.name || raw?.sub_category_name || editing?.subCategory || '',
+    subId:        raw?.sub_category_id   || raw?.sub_category?._id || null,
+    brandName:    raw?.brand?.name       || raw?.brand_name       || editing?.brand       || '',
+    brandId:      raw?.brand_id          || raw?.brand?._id       || null,
+  }), [raw, editing]);
+
+  // Pre-select when editing
+  useEffect(() => {
+    if (!editing || !categories.length) return;
+    const cat = categories.find(c =>
+      c.name === editRefs.categoryName ||
+      String(c._id) === String(editRefs.categoryId)
+    );
+    if (cat) {
+      setCategory(cat);
+      const sub = (cat.sub_categories || []).find(s =>
+        s.name === editRefs.subName ||
+        String(s._id) === String(editRefs.subId)
+      );
+      if (sub) setSubCategory(sub);
+    }
+    const br = brands.find(b =>
+      b.name === editRefs.brandName ||
+      String(b._id) === String(editRefs.brandId)
+    );
+    if (br) setBrand(br);
+  }, [editing, categories, brands, editRefs]);
+
+  // Default unit when category changes (new product only)
+  useEffect(() => {
+    if (category && !isEdit) {
+      setUnit(CATEGORY_UNIT[categoryTypeFromName(category.name)] || 'Piece');
+    }
+  }, [category, isEdit]);
+
+  // ── Derived ───────────────────────────────────────────────
+  const catType = useMemo(
+    () => raw?.category_type || categoryTypeFromName(category?.name || ''),
+    [category, raw]
+  );
+  const fields = useMemo(() => fieldsForType(catType), [catType]);
+  const subs   = category?.sub_categories || [];
+
+  // Steps shift down by one when the category has no sub-categories — identical
+  // to the wholesaler form. `detailsN` is the step number of the Details card.
+  const hasSubs  = subs.length > 0;
+  const detailsN = hasSubs ? 4 : 3;
+  const pricingN = hasSubs ? 5 : 4;
+  const imagesN  = hasSubs ? 6 : 5;
+
+  // ── Create taxonomy items ─────────────────────────────────
+  const submitModal = async () => {
+    const val = modalInput.trim();
+    if (!val) return;
+    setModalSaving(true);
+    try {
+      if (activeModal === 'newCat') {
+        await catalogApi.createCategory({ name: val });
+        const fresh = await loadTaxonomy();
+        const picked = (fresh.cats || []).find(c => c.name?.toLowerCase() === val.toLowerCase());
+        if (picked) { setCategory(picked); setSubCategory(null); }
+      } else if (activeModal === 'newSub') {
+        if (!category?._id) { Alert.alert('Select a category first'); return; }
+        await catalogApi.createSubCategory({ name: val, category_id: category._id });
+        const fresh = await loadTaxonomy();
+        const freshCat = (fresh.cats || []).find(c => String(c._id) === String(category._id));
+        if (freshCat) {
+          setCategory(freshCat);
+          const picked = (freshCat.sub_categories || []).find(s => s.name?.toLowerCase() === val.toLowerCase());
+          if (picked) setSubCategory(picked);
+        }
+      } else if (activeModal === 'newBrand') {
+        await catalogApi.createBrand({ name: val });
+        const fresh = await loadTaxonomy();
+        const picked = (fresh.brnds || []).find(b => b.name?.toLowerCase() === val.toLowerCase());
+        if (picked) setBrand(picked);
+      }
+      setModal(null);
+      setModalInput('');
+    } catch (err) {
+      Alert.alert('Failed', err?.message || 'Could not save. Try again.');
+    } finally {
+      setModalSaving(false);
+    }
+  };
+
+  // ── Image picker ──────────────────────────────────────────
   const pickImages = async () => {
-    const cnt = exImgs.length + newImgs.length;
-    if (cnt >= MAX_IMAGES) { Alert.alert('Limit', `Max ${MAX_IMAGES} images.`); return; }
-    const res = await launchImageLibrary({ mediaType: 'photo', quality: 0.8, selectionLimit: MAX_IMAGES - cnt });
+    const count = imageUrls.length + newImgs.length;
+    if (count >= MAX_IMAGES) {
+      Alert.alert('Limit reached', `You can add up to ${MAX_IMAGES} images.`);
+      return;
+    }
+    const res = await launchImageLibrary({
+      mediaType: 'photo', quality: 0.8, selectionLimit: MAX_IMAGES - count,
+    });
     if (res.didCancel) return;
+    if (res.errorCode) { Alert.alert('Error', res.errorMessage || 'Could not open gallery.'); return; }
     const picked = (res.assets || []).map((a, i) => ({
       uri: a.uri, type: a.type || 'image/jpeg', name: a.fileName || `p_${Date.now()}_${i}.jpg`,
     }));
-    setNewImgs(p => [...p, ...picked].slice(0, MAX_IMAGES - exImgs.length));
+    setNewImgs(prev => [...prev, ...picked].slice(0, MAX_IMAGES - imageUrls.length));
   };
+  const removeExisting = (url) => setImageUrls(prev => prev.filter(u => u !== url));
+  const removeNew = (idx) => setNewImgs(prev => prev.filter((_, i) => i !== idx));
 
   // ── Save ──────────────────────────────────────────────────
   const handleSave = async () => {
-    if (isEdit && !ready) { setError('Wait for product details to finish loading.'); return; }
-    if (!form.name.trim()) { setError('Product name is required.'); return; }
-    for (const fd of dynFields) {
-      if (!fd.required) continue;
-      const v = fd.storeIn === 'column' ? form[fd.key] : attrs[fd.key];
-      if (!v || !String(v).trim()) {
-        setError(`${fd.label} is required for ${labelForType(catType)} products.`);
-        return;
-      }
+    const e = {};
+    if (!category)          e._category = 'Select a category';
+    if (!brand)             e._brand    = 'Select a brand';
+    if (!name.trim())       e.name      = 'Product name is required';
+    fields.forEach(f => {
+      if (f.required && !String(attrs[f.key] ?? '').trim()) e[f.key] = `${f.label} is required`;
+    });
+    if (!prices2.purchase_price) e.purchase_price = 'Purchase price required';
+    setErrors(e);
+    if (Object.keys(e).length) {
+      Alert.alert('Missing details', Object.values(e)[0]);
+      return;
     }
-    setSaving(true); setError('');
+
+    const sizeStr = attrs.size
+      || (attrs.length && attrs.width ? `${attrs.length}x${attrs.width}` : '')
+      || '';
+
+    const fieldPayload = {
+      name:              name.trim(),
+      code:              prices2.code.trim() || undefined,
+      unit,
+      size:              sizeStr,
+      finish:            attrs.finish  || '',
+      color:             attrs.colour  || attrs.color || '',
+      material:          attrs.material || '',
+      thickness:         attrs.thickness || '',
+      category_name:     category.name,
+      sub_category_name: subCategory?.name || '',
+      brand_name:        brand.name,
+      category_type:     catType,
+      attributes:        attrs,
+      hsn_code:          prices2.hsn_code.trim(),
+      description:       desc.trim(),
+      pcs_per_box:       prices2.pcs_per_box   || undefined,
+      sqft_per_box:      prices2.sqft_per_box  || undefined,
+      gst_percent:       prices2.gst_percent   || 18,
+      purchase_price:    prices2.purchase_price || 0,
+      selling_price:     prices2.selling_price  || 0,
+      wholesale_rate:    prices2.wholesale_rate  || 0,
+      mrp:               prices2.mrp             || 0,
+      opening_stock:     prices2.opening_stock   || 0,
+    };
+
+    setSaving(true);
     try {
-      const fields = { ...form };
-      DISC_FIELDS.forEach(f => delete fields[f]);
-      fields.attributes = { ...attrs };
-      const saved = isEdit
-        ? await myProductApi.update(productId, fields, newImgs, exImgs)
-        : await myProductApi.create(fields, newImgs);
+      if (isEdit) {
+        await myProductApi.update(productId, fieldPayload, newImgs, imageUrls);
+        Alert.alert('Updated', 'Product updated successfully.', [
+          { text: 'OK', onPress: () => navigation.goBack() },
+        ]);
+      } else {
+        await myProductApi.create(fieldPayload, newImgs);
+        Alert.alert('Added', 'Product added to your catalogue.', [
+          { text: 'OK', onPress: () => navigation.goBack() },
+        ]);
+      }
+    } catch (err) {
+      Alert.alert('Failed', err?.message || 'Could not save product.');
+    } finally {
       setSaving(false);
-      Alert.alert(
-        isEdit ? 'Product updated' : 'Product created',
-        `${saved?.name || 'Product'} has been ${isEdit ? 'updated' : 'added'}.`,
-        [{ text: 'OK', onPress: () => navigation.goBack() }],
-      );
-    } catch (e) {
-      setSaving(false);
-      setError(e.message || 'Could not save product.');
     }
   };
 
-  const num = key => v => set(key, sanitizeDecimal(v));
-  const hasCat = !!catName;
+  const totalImages = imageUrls.length + newImgs.length;
 
-  // ── RENDER ────────────────────────────────────────────────
-  const insets = useSafeAreaInsets();
+  // ── Render ────────────────────────────────────────────────
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={Colors.secondary} />
+      <StatusBar barStyle="light-content" backgroundColor={NAVY} />
 
       {/* Header */}
       <View style={s.header}>
-        <TouchableOpacity style={s.hBtn}
-          onPress={() => step === 2 && !isEdit ? setStep(1) : navigation.goBack()}
+        <TouchableOpacity onPress={() => navigation.goBack()} style={s.hBtn}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-          <Ionicons name={step === 2 && !isEdit ? 'arrow-back' : 'arrow-back'} size={22} color="#FFF" />
+          <Ionicons name="arrow-back" size={22} color="#FFF" />
         </TouchableOpacity>
-        <View style={s.hCenter}>
-          <Text style={s.hTitle}>{isEdit ? 'Edit Product' : 'Add New Product'}</Text>
-          <Text style={s.hSub}>
-            {isEdit
-              ? `${labelForType(catType)} · ${catName || 'Product'}`
-              : step === 1
-              ? 'Step 1 of 2 — Select Category & Brand'
-              : `Step 2 of 2 — ${labelForType(catType)} Details`}
-          </Text>
-        </View>
-        {/* Step indicator */}
-        {!isEdit && (
-          <View style={s.stepIndicator}>
-            <View style={[s.stepDotSm, step >= 1 && s.stepDotSmActive]}>
-              <Text style={s.stepDotSmTxt}>1</Text>
-            </View>
-            <View style={[s.stepLine, step >= 2 && s.stepLineActive]} />
-            <View style={[s.stepDotSm, step >= 2 && s.stepDotSmActive]}>
-              <Text style={s.stepDotSmTxt}>2</Text>
-            </View>
-          </View>
-        )}
+        <Text style={s.headerTitle}>{isEdit ? 'Edit Product' : 'Add Product'}</Text>
+        <View style={{ width: 32 }} />
       </View>
 
-      {/* ─── STEP 1 ─── */}
-      {step === 1 && (
-        <Step1
-          cats={cats} subs={subs} brands={brands}
-          catId={catId} subId={subId} brandId={brandId}
-          onCatId={setCatId} onSubId={setSubId} onBrandId={setBrandId}
-          catFreeText={catFreeText} brandFreeText={brandFreeText}
-          onCatFreeText={setCatFreeText} onBrandFreeText={setBrandFreeText}
-          typeOverride={typeOverride}
-          onTypeOverride={t => setTypeOverride(t)}
-          onContinue={() => setStep(2)}
-          onCancel={() => navigation.goBack()}
-          bottomInset={Math.max(insets.bottom, 14)}
-        />
-      )}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}>
+        <ScrollView
+          contentContainerStyle={[s.container, { paddingBottom: Math.max(insets.bottom + 40, 60) }]}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          showsVerticalScrollIndicator={false}>
 
-      {/* ─── STEP 2 ─── */}
-      {step === 2 && (
-        <KeyboardAvoidingView style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <ScrollView
-            contentContainerStyle={[s.scroll, { paddingBottom: Math.max(insets.bottom + 60, 80) }]}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled">
-
-            {fetching && (
-              <View style={s.infoBox}>
-                <ActivityIndicator size="small" color={Colors.primary} />
-                <Text style={s.infoTxt}>Loading product details…</Text>
+          {/* ── STEP 1 — Category ── */}
+          <StepLabel n="1" text="Select Category" />
+          <View style={s.card}>
+            {taxLoading ? (
+              <View style={s.loadingRow}>
+                <ActivityIndicator size="small" color={ORANGE} />
+                <Text style={s.loadingTxt}>Loading categories…</Text>
               </View>
+            ) : (
+              <>
+                {categories.length === 0 ? (
+                  <Text style={s.mutedTxt}>No categories yet. Tap "Add new Category" to create one.</Text>
+                ) : (
+                  <ChipRow
+                    items={categories}
+                    activeId={category?._id}
+                    onPick={c => { setCategory(c); setSubCategory(null); }}
+                  />
+                )}
+                <AddNewBtn label="Category" onPress={() => { setModalInput(''); setModal('newCat'); }} />
+                {!!errors._category && <Text style={s.errTxt}>{errors._category}</Text>}
+              </>
             )}
-            {!!error && (
-              <View style={s.errBox}>
-                <Ionicons name="alert-circle" size={15} color={Colors.error} />
-                <Text style={s.errTxt}>{error}</Text>
-              </View>
-            )}
+          </View>
 
-            {/* Selection summary row */}
-            <View style={s.selSummary}>
-              <View style={s.selSummaryItem}>
-                <Ionicons name="folder-outline" size={13} color={Colors.primary} />
-                <Text style={s.selSummaryTxt} numberOfLines={1}>{catName || '—'}</Text>
-              </View>
-              {(subSel?.name || form.sub_category_name) ? (
-                <View style={s.selSummaryItem}>
-                  <Ionicons name="pricetag-outline" size={13} color="#EA580C" />
-                  <Text style={s.selSummaryTxt} numberOfLines={1}>
-                    {subSel?.name || form.sub_category_name}
-                  </Text>
-                </View>
-              ) : null}
-              <View style={s.selSummaryItem}>
-                <Ionicons name="bookmark-outline" size={13} color="#7C3AED" />
-                <Text style={s.selSummaryTxt} numberOfLines={1}>{brandName || '—'}</Text>
-              </View>
-              {!isEdit && (
-                <TouchableOpacity onPress={() => setStep(1)} style={s.changeBtn}>
-                  <Text style={s.changeBtnTxt}>Change</Text>
-                </TouchableOpacity>
+          {/* ── STEP 2 — Sub-Category (only when the category has subs) ── */}
+          {category && (
+            <>
+              {hasSubs && (
+                <>
+                  <StepLabel n="2" text="Select Sub-Category" />
+                  <View style={s.card}>
+                    <ChipRow
+                      items={subs}
+                      activeId={subCategory?._id}
+                      onPick={sub => setSubCategory(prev => prev?._id === sub._id ? null : sub)}
+                    />
+                  </View>
+                </>
               )}
-            </View>
 
-            {/* ── Images ── */}
-            <SH title="Product Images" />
-            <View style={s.imgRow}>
-              {exImgs.map(url => (
-                <View key={url} style={s.imgThumb}>
-                  <Image source={{ uri: mediaUrl(url) }} style={s.imgImg} />
-                  <TouchableOpacity style={s.imgDel}
-                    onPress={() => setExImgs(p => p.filter(u => u !== url))}>
-                    <Ionicons name="close" size={11} color="#FFF" />
+              {/* ── Next step — Brand ── */}
+              <StepLabel n={hasSubs ? '3' : '2'} text="Select Brand" />
+              <View style={s.card}>
+                {brands.length === 0 ? (
+                  <Text style={s.mutedTxt}>No brands yet. Tap "Add new Brand" to create one.</Text>
+                ) : (
+                  <ChipRow
+                    items={brands}
+                    activeId={brand?._id}
+                    onPick={b => setBrand(prev => prev?._id === b._id ? null : b)}
+                  />
+                )}
+                <AddNewBtn label="Brand" onPress={() => { setModalInput(''); setModal('newBrand'); }} />
+                {!!errors._brand && <Text style={s.errTxt}>{errors._brand}</Text>}
+              </View>
+            </>
+          )}
+
+          {/* Gate hint */}
+          {category && !brand && (
+            <View style={s.gateHint}>
+              <Ionicons name="arrow-up" size={16} color={ORANGE} />
+              <Text style={s.gateHintTxt}>Select a Brand above to continue adding the item.</Text>
+            </View>
+          )}
+
+          {/* ── STEP 4 — Product Details ── */}
+          {category && brand && (
+            <>
+              <StepLabel n={String(detailsN)} text={`${cap(catType)} Details`} />
+              <View style={s.card}>
+
+                {/* Product name always first */}
+                <View style={s.fieldWrap}>
+                  <FL>Product Name *</FL>
+                  <RNTextInput
+                    style={[s.input, errors.name && s.inputErr]}
+                    value={name}
+                    onChangeText={t => { setName(t); setErrors(e => ({ ...e, name: null })); }}
+                    placeholder="e.g. Black Galaxy Slab"
+                    placeholderTextColor={Colors.textTertiary}
+                  />
+                  {!!errors.name && <Text style={s.errTxt}>{errors.name}</Text>}
+                </View>
+
+                {/* Dynamic category-specific fields */}
+                <View style={s.grid}>
+                  {fields.map(f => {
+                    const val = String(attrs[f.key] ?? '');
+                    if (f.type === 'select') {
+                      return (
+                        <FSelect
+                          key={f.key}
+                          label={f.label}
+                          value={val}
+                          required={f.required}
+                          half={f.half}
+                          error={errors[f.key]}
+                          onPress={() => { setSelectField(f); setModal('select'); }}
+                          onAdd={() => { setOptModalField(f); setOptInput(''); }}
+                        />
+                      );
+                    }
+                    return (
+                      <FInput
+                        key={f.key}
+                        label={`${f.label}${f.unit ? ` (${f.unit})` : ''}`}
+                        value={val}
+                        required={f.required}
+                        half={f.half}
+                        error={errors[f.key]}
+                        placeholder={f.placeholder || ''}
+                        keyboardType={f.type === 'number' ? 'decimal-pad' : 'default'}
+                        onChangeText={t => setAttr(f.key, f.type === 'number' ? numOnly(t) : t)}
+                      />
+                    );
+                  })}
+                </View>
+              </View>
+
+              {/* ── STEP 5 — Unit, Pricing & Stock ── */}
+              <StepLabel n={String(pricingN)} text="Unit, Pricing & Stock" />
+              <View style={s.card}>
+
+                {/* Unit picker */}
+                <View style={s.fieldWrap}>
+                  <FL>Unit of Measurement</FL>
+                  <TouchableOpacity
+                    style={s.selectBox}
+                    onPress={() => setModal('unit')}
+                    activeOpacity={0.8}>
+                    <Text style={s.selectTxt}>{unit}</Text>
+                    <Ionicons name="chevron-down" size={16} color={MUTED} />
                   </TouchableOpacity>
                 </View>
-              ))}
-              {newImgs.map((img, idx) => (
-                <View key={`ni-${idx}`} style={s.imgThumb}>
-                  <Image source={{ uri: img.uri }} style={s.imgImg} />
-                  <TouchableOpacity style={s.imgDel}
-                    onPress={() => setNewImgs(p => p.filter((_, i) => i !== idx))}>
-                    <Ionicons name="close" size={11} color="#FFF" />
-                  </TouchableOpacity>
+
+                {/* Pricing — 2-column grid */}
+                <View style={s.grid}>
+                  <View style={s.halfCol}>
+                    <FL>Purchase Price *</FL>
+                    <RNTextInput style={[s.input, errors.purchase_price && s.inputErr]} value={prices2.purchase_price}
+                      onChangeText={t => { setPrice('purchase_price', numOnly(t)); setErrors(e => ({ ...e, purchase_price: null })); }}
+                      keyboardType="decimal-pad" placeholder="0" placeholderTextColor={Colors.textTertiary} />
+                    {!!errors.purchase_price && <Text style={s.errTxt}>{errors.purchase_price}</Text>}
+                  </View>
+                  <View style={s.halfCol}>
+                    <FL>Selling Price</FL>
+                    <RNTextInput style={s.input} value={prices2.selling_price}
+                      onChangeText={t => setPrice('selling_price', numOnly(t))}
+                      keyboardType="decimal-pad" placeholder="0" placeholderTextColor={Colors.textTertiary} />
+                  </View>
+                  <View style={s.halfCol}>
+                    <FL>Wholesale / Dealer</FL>
+                    <RNTextInput style={s.input} value={prices2.wholesale_rate}
+                      onChangeText={t => setPrice('wholesale_rate', numOnly(t))}
+                      keyboardType="decimal-pad" placeholder="0" placeholderTextColor={Colors.textTertiary} />
+                  </View>
+                  <View style={s.halfCol}>
+                    <FL>MRP</FL>
+                    <RNTextInput style={s.input} value={prices2.mrp}
+                      onChangeText={t => setPrice('mrp', numOnly(t))}
+                      keyboardType="decimal-pad" placeholder="0" placeholderTextColor={Colors.textTertiary} />
+                  </View>
+                  <View style={s.halfCol}>
+                    <FL>GST %</FL>
+                    <RNTextInput style={s.input} value={prices2.gst_percent}
+                      onChangeText={t => setPrice('gst_percent', numOnly(t))}
+                      keyboardType="decimal-pad" placeholder="18" placeholderTextColor={Colors.textTertiary} />
+                  </View>
+                  <View style={s.halfCol}>
+                    <FL>Opening Stock ({unit})</FL>
+                    <RNTextInput style={s.input} value={prices2.opening_stock}
+                      onChangeText={t => setPrice('opening_stock', numOnly(t))}
+                      keyboardType="decimal-pad" placeholder="0" placeholderTextColor={Colors.textTertiary} />
+                  </View>
+                  <View style={s.halfCol}>
+                    <FL>Pieces per Box</FL>
+                    <RNTextInput style={s.input} value={prices2.pcs_per_box}
+                      onChangeText={t => setPrice('pcs_per_box', numOnly(t))}
+                      keyboardType="decimal-pad" placeholder="e.g. 4" placeholderTextColor={Colors.textTertiary} />
+                  </View>
+                  <View style={s.halfCol}>
+                    <FL>Sq Ft per Box</FL>
+                    <RNTextInput style={s.input} value={prices2.sqft_per_box}
+                      onChangeText={t => setPrice('sqft_per_box', numOnly(t))}
+                      keyboardType="decimal-pad" placeholder="e.g. 16" placeholderTextColor={Colors.textTertiary} />
+                  </View>
                 </View>
-              ))}
-              {exImgs.length + newImgs.length < MAX_IMAGES && (
-                <TouchableOpacity style={s.imgAdd} onPress={pickImages}>
-                  <Ionicons name="add" size={22} color={Colors.textTertiary} />
-                  <Text style={s.imgAddTxt}>Add</Text>
+
+                {/* HSN Code — full width */}
+                <View style={s.fieldWrap}>
+                  <FL>HSN Code</FL>
+                  <RNTextInput style={s.input} value={prices2.hsn_code}
+                    onChangeText={t => setPrice('hsn_code', t)}
+                    placeholder="Optional" placeholderTextColor={Colors.textTertiary} />
+                </View>
+              </View>
+
+              {/* ── STEP 6 — Images ── */}
+              <StepLabel n={String(imagesN)} text="Images" />
+              <View style={s.card}>
+                <View style={s.imgRow}>
+                  {imageUrls.map(u => (
+                    <View key={u} style={s.imgWrap}>
+                      <Image source={{ uri: mediaUrl(u) }} style={s.imgThumb} resizeMode="cover" />
+                      <TouchableOpacity style={s.imgRemove} onPress={() => removeExisting(u)}>
+                        <Ionicons name="close" size={12} color="#fff" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  {newImgs.map((img, idx) => (
+                    <View key={`ni-${idx}`} style={s.imgWrap}>
+                      <Image source={{ uri: img.uri }} style={s.imgThumb} resizeMode="cover" />
+                      <TouchableOpacity style={s.imgRemove} onPress={() => removeNew(idx)}>
+                        <Ionicons name="close" size={12} color="#fff" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  {totalImages < MAX_IMAGES && (
+                    <TouchableOpacity style={s.imgAdd} onPress={pickImages} activeOpacity={0.8}>
+                      <Ionicons name="camera-outline" size={22} color={ORANGE} />
+                      <Text style={s.imgAddTxt}>Add</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+                <Text style={s.imgHint}>{totalImages} / {MAX_IMAGES} images</Text>
+              </View>
+
+              {/* ── Extra details (retailer-specific: code + description) ── */}
+              <View style={s.card}>
+                <View style={s.fieldWrap}>
+                  <FL>Product Code</FL>
+                  <RNTextInput
+                    style={s.input}
+                    value={prices2.code}
+                    onChangeText={t => setPrice('code', t)}
+                    placeholder="Leave blank to auto-generate"
+                    placeholderTextColor={Colors.textTertiary}
+                    autoCapitalize="characters"
+                  />
+                </View>
+                <View style={s.fieldWrap}>
+                  <FL>Description (optional)</FL>
+                  <RNTextInput
+                    style={[s.input, { height: 80, textAlignVertical: 'top', paddingTop: 10 }]}
+                    value={desc}
+                    onChangeText={setDesc}
+                    placeholder="Product description…"
+                    placeholderTextColor={Colors.textTertiary}
+                    multiline
+                  />
+                </View>
+              </View>
+
+              {/* Save button */}
+              <TouchableOpacity
+                style={[s.saveBtn, saving && { opacity: 0.6 }]}
+                onPress={handleSave}
+                disabled={saving}
+                activeOpacity={0.85}>
+                {saving
+                  ? <ActivityIndicator size="small" color="#FFF" />
+                  : <>
+                      <Ionicons name="checkmark-circle-outline" size={20} color="#FFF" />
+                      <Text style={s.saveBtnTxt}>{isEdit ? 'Save Changes' : 'Add Product'}</Text>
+                    </>}
+              </TouchableOpacity>
+            </>
+          )}
+
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      {/* ══ MODALS ══════════════════════════════════════════════ */}
+
+      {/* Unit picker */}
+      <Modal visible={activeModal === 'unit'} transparent animationType="fade" onRequestClose={() => setModal(null)}>
+        <Pressable style={s.overlay} onPress={() => setModal(null)}>
+          <Pressable style={s.modalCard} onPress={() => {}}>
+            <Text style={s.modalTitle}>Unit of Measurement</Text>
+            <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+              {UNIT_OPTIONS.map(u => (
+                <TouchableOpacity
+                  key={u}
+                  style={[s.optRow, unit === u && s.optRowOn]}
+                  onPress={() => { setUnit(u); setModal(null); }}>
+                  <Text style={[s.optTxt, unit === u && { color: ORANGE, fontWeight: '800' }]}>{u}</Text>
+                  {unit === u && <Ionicons name="checkmark" size={18} color={ORANGE} />}
                 </TouchableOpacity>
-              )}
+              ))}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Dynamic select-field picker — list + delete + add-new */}
+      <Modal visible={activeModal === 'select'} transparent animationType="fade" onRequestClose={() => setModal(null)}>
+        <Pressable style={s.overlay} onPress={() => setModal(null)}>
+          <Pressable style={s.modalCard} onPress={() => {}}>
+            <Text style={s.modalTitle}>{selectField?.label}</Text>
+            <ScrollView style={{ maxHeight: 340 }} showsVerticalScrollIndicator={false}>
+              {(selectField ? optionsFor(selectField) : []).map(opt => {
+                const on = attrs[selectField.key] === opt;
+                return (
+                  <View key={opt} style={[s.optRow, on && s.optRowOn]}>
+                    <TouchableOpacity
+                      style={{ flex: 1 }}
+                      onPress={() => { setAttr(selectField.key, opt); setModal(null); }}>
+                      <Text style={[s.optTxt, on && { color: ORANGE, fontWeight: '800' }]}>{opt}</Text>
+                    </TouchableOpacity>
+                    {on && <Ionicons name="checkmark" size={18} color={ORANGE} style={{ marginRight: 6 }} />}
+                    <TouchableOpacity
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      onPress={() => deleteOption(selectField, opt)}>
+                      <Ionicons name="trash-outline" size={18} color={Colors.error} />
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </ScrollView>
+            {/* Add a new custom option from inside the picker too */}
+            <TouchableOpacity
+              style={s.optAddInline}
+              onPress={() => { const f = selectField; setModal(null); setOptModalField(f); setOptInput(''); }}>
+              <Ionicons name="add-circle-outline" size={18} color={ORANGE} />
+              <Text style={s.optAddInlineTxt}>Add new {selectField?.label}</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Add custom option modal */}
+      <Modal visible={!!optModalField} transparent animationType="fade" onRequestClose={() => setOptModalField(null)}>
+        <Pressable style={s.overlay} onPress={() => setOptModalField(null)}>
+          <Pressable style={s.modalCard} onPress={() => {}}>
+            <Text style={s.modalTitle}>Add {optModalField?.label}</Text>
+            <RNTextInput
+              style={s.modalInput}
+              value={optInput}
+              onChangeText={setOptInput}
+              autoFocus
+              placeholder={`Enter ${optModalField?.label || 'value'}`}
+              placeholderTextColor={MUTED}
+            />
+            <View style={s.modalBtnRow}>
+              <TouchableOpacity style={s.btnGhost} onPress={() => setOptModalField(null)}>
+                <Text style={s.btnGhostTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.btnPrimary} onPress={addCustomOption}>
+                <Text style={s.btnPrimaryTxt}>Add</Text>
+              </TouchableOpacity>
             </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
-            {/* ── Basic Info ── */}
-            <SH title="Basic Information" />
-            <TextInput label="Product Name" required value={form.name}
-              onChangeText={v => set('name', v)}
-              placeholder="e.g. Black Galaxy Granite Slab" />
-            <TextInput label="Product Code" value={form.code}
-              onChangeText={v => set('code', v)}
-              placeholder="Auto-generated if blank" autoCapitalize="characters" />
-            <TextInput label="Alias" value={form.alias}
-              onChangeText={v => set('alias', v)} placeholder="Short name (optional)" />
-            <TextInput label="HSN Code" value={form.hsn_code}
-              onChangeText={v => set('hsn_code', v)} placeholder="HSN / SAC code" />
-            <TextInput label="Description" value={form.description}
-              onChangeText={v => set('description', v)} placeholder="Product description"
-              multiline numberOfLines={3} />
-
-            {/* ── Unit & Tax ── */}
-            <SH title="Unit & Tax" />
-            <View style={s.grid}>
-              <View style={s.g2}>
-                <SelField label="Unit" required options={UNITS}
-                  value={form.unit} onChange={v => set('unit', v)} />
-              </View>
-              <View style={s.g2}>
-                <SelField label="GST %"
-                  options={GST_OPTS.map(v => ({ value: v, label: `${v}%` }))}
-                  value={form.gst_percent} onChange={v => set('gst_percent', v)} />
-              </View>
-            </View>
-
-            {/* ── Category-specific dynamic specs ── */}
-            {hasCat && dynFields.length > 0 && (
-              <CollapsibleSpec
-                title={`${labelForType(catType)} Specifications`}
-                fields={dynFields}
-                form={form}
-                attrs={attrs}
-                set={set}
-                setAttr={setAttr}
+      {/* Create Category / Sub-Category / Brand */}
+      {['newCat', 'newSub', 'newBrand'].map(type => (
+        <Modal key={type} visible={activeModal === type} transparent animationType="fade"
+          onRequestClose={() => { setModal(null); setModalInput(''); }}>
+          <Pressable style={s.overlay} onPress={() => { setModal(null); setModalInput(''); }}>
+            <Pressable style={s.modalCard} onPress={() => {}}>
+              <Text style={s.modalTitle}>
+                {type === 'newCat'   ? 'Add Category'
+                : type === 'newSub'  ? 'Add Sub-Category'
+                :                      'Add Brand'}
+              </Text>
+              <RNTextInput
+                style={s.modalInput}
+                value={modalInput}
+                onChangeText={setModalInput}
+                autoFocus
+                placeholder={
+                  type === 'newCat'  ? 'e.g. Tiles, Granite, Marble'
+                  : type === 'newSub' ? 'e.g. Floor Tiles, Slabs'
+                  :                     'e.g. Kajaria, Nitco'
+                }
+                placeholderTextColor={MUTED}
               />
-            )}
+              <View style={s.modalBtnRow}>
+                <TouchableOpacity
+                  style={s.btnGhost}
+                  onPress={() => { setModal(null); setModalInput(''); }}>
+                  <Text style={s.btnGhostTxt}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[s.btnPrimary, modalSaving && { opacity: 0.6 }]}
+                  onPress={submitModal}
+                  disabled={modalSaving}>
+                  {modalSaving
+                    ? <ActivityIndicator size="small" color="#FFF" />
+                    : <Text style={s.btnPrimaryTxt}>Add</Text>}
+                </TouchableOpacity>
+              </View>
+            </Pressable>
+          </Pressable>
+        </Modal>
+      ))}
 
-            {/* Packing & Collection for tiles / general */}
-            {(catType === 'tiles' || catType === 'other') && (
-              <CollapsibleSpec
-                title="Packing & Collection"
-                fields={[
-                  { key: 'design',         label: 'Design',            type: 'text',   storeIn: 'column', placeholder: 'Design name' },
-                  { key: 'collection',     label: 'Collection',        type: 'text',   storeIn: 'column', placeholder: 'Collection name' },
-                  { key: 'pcs_per_box',    label: 'Pieces / Box',      type: 'number', storeIn: 'column' },
-                  { key: 'sqft_per_box',   label: 'Sq.Ft / Box (auto)',type: 'number', storeIn: 'column' },
-                  { key: 'weight_per_box', label: 'Weight / Box (kg)', type: 'number', storeIn: 'column' },
-                ]}
-                form={form}
-                attrs={attrs}
-                set={set}
-                setAttr={setAttr}
-              />
-            )}
-
-            {/* ── Pricing ── */}
-            <SH title="Pricing" />
-            <View style={s.grid}>
-              <View style={s.g2}>
-                <TextInput label="Purchase Rate" value={form.purchase_rate}
-                  onChangeText={num('purchase_rate')} placeholder="0.00" keyboardType="decimal-pad" />
-              </View>
-              <View style={s.g2}>
-                <TextInput label="Landing Cost" value={form.landing_cost}
-                  onChangeText={num('landing_cost')} placeholder="0.00" keyboardType="decimal-pad" />
-              </View>
-              <View style={s.gFull}>
-                <TextInput label="MRP" value={form.mrp}
-                  onChangeText={num('mrp')} placeholder="0.00" keyboardType="decimal-pad"
-                  helperText="Rates below auto-calculate from MRP + discount %" />
-              </View>
-            </View>
-            <PDR label="Retail"
-              discount={form.retail_discount} rate={form.retail_rate}
-              onD={v => set('retail_discount', v)} onR={num('retail_rate')} />
-            <PDR label="Project"
-              discount={form.project_discount} rate={form.project_rate}
-              onD={v => set('project_discount', v)} onR={num('project_rate')} />
-            <View style={s.grid}>
-              <View style={s.g2}>
-                <TextInput label="Min Selling Rate" value={form.min_selling_rate}
-                  onChangeText={num('min_selling_rate')} placeholder="0.00" keyboardType="decimal-pad" />
-              </View>
-              <View style={s.g2}>
-                <TextInput label="Min Stock Level" value={form.min_stock_level}
-                  onChangeText={num('min_stock_level')} placeholder="0" keyboardType="decimal-pad" />
-              </View>
-              <View style={s.g2}>
-                <TextInput label="Reorder Level" value={form.reorder_level}
-                  onChangeText={num('reorder_level')} placeholder="0" keyboardType="decimal-pad" />
-              </View>
-            </View>
-
-            <PrimaryButton
-              title={isEdit ? 'UPDATE PRODUCT' : 'SAVE PRODUCT'}
-              onPress={handleSave} loading={saving}
-              disabled={isEdit && !ready}
-              variant="primary" size="lg"
-              style={{ marginTop: Spacing.lg }} />
-
-            <View style={{ height: 40 }} />
-          </ScrollView>
-        </KeyboardAvoidingView>
-      )}
     </SafeAreaView>
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────
+const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : 'Product');
+
+// ── Styles ────────────────────────────────────────────────────
 const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.background },
+  safe:        { flex: 1, backgroundColor: Colors.background },
+  header:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: NAVY, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 14 },
+  hBtn:        { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 17, fontWeight: '800', color: '#FFF' },
+  container:   { padding: Spacing.screenPadding, backgroundColor: Colors.background },
 
-  // Header
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: Colors.secondary,
-    paddingHorizontal: Spacing.screenPadding, paddingTop: 8, paddingBottom: 14,
-  },
-  hBtn:   { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
-  hCenter:{ flex: 1, alignItems: 'center' },
-  hTitle: { ...Typography.h4, color: '#FFF' },
-  hSub:   { ...Typography.caption, color: 'rgba(255,255,255,0.6)', marginTop: 1, textAlign: 'center' },
+  // Step label
+  stepRow:     { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8, marginBottom: 10 },
+  stepDot:     { width: 24, height: 24, borderRadius: 12, backgroundColor: ORANGE, alignItems: 'center', justifyContent: 'center' },
+  stepDotTxt:  { color: '#FFF', fontSize: 12, fontWeight: '900' },
+  stepTxt:     { fontSize: 13, fontWeight: '800', color: Colors.textPrimary, flex: 1 },
+  stepLine:    { flex: 1, height: 1, backgroundColor: BORDER },
 
-  // Step indicator in header
-  stepIndicator: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  stepDotSm:     { width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
-  stepDotSmActive: { backgroundColor: Colors.primary },
-  stepDotSmTxt:  { fontSize: 11, fontWeight: '800', color: '#FFF' },
-  stepLine:      { width: 14, height: 2, backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 1 },
-  stepLineActive:{ backgroundColor: Colors.primary },
+  // Card
+  card: { backgroundColor: '#FFF', borderRadius: 14, padding: 14, marginBottom: 14, borderWidth: 1, borderColor: BORDER, ...Shadows.sm, gap: 10 },
 
-  // Step 1
-  step1Scroll: { padding: Spacing.screenPadding, paddingBottom: 40 },
-  stepLabel:   { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 20 },
-  stepDot:     { width: 28, height: 28, borderRadius: 14, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
-  stepDotTxt:  { fontSize: 13, fontWeight: '900', color: '#FFF' },
-  stepTxt:     { fontSize: 11, fontWeight: '800', color: Colors.textSecondary, letterSpacing: 0.5, textTransform: 'uppercase', flex: 1 },
-  step1Hint:   { flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: Colors.primaryBg, borderRadius: 10, padding: 14, marginTop: 8, borderWidth: 1, borderColor: Colors.primary + '30' },
-  step1HintTxt:{ flex: 1, fontSize: 13, color: Colors.primary, lineHeight: 18 },
-  step1Footer: { flexDirection: 'row', gap: 12, padding: 16, borderTopWidth: 1, borderTopColor: Colors.borderLight, backgroundColor: '#FFF' },
-  cancelBtn:   { flex: 1, borderRadius: 12, borderWidth: 1.5, borderColor: Colors.border, paddingVertical: 13, alignItems: 'center' },
-  cancelTxt:   { fontSize: 14, fontWeight: '700', color: Colors.textSecondary },
-  continueBtn: { flex: 2, borderRadius: 12, backgroundColor: Colors.primary, paddingVertical: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-  continueBtnDisabled: { backgroundColor: Colors.borderLight },
-  continueTxt: { fontSize: 14, fontWeight: '700', color: '#FFF' },
-  continueTxtDisabled: { color: Colors.textTertiary },
+  loadingRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
+  loadingTxt: { fontSize: 13, color: MUTED },
+  mutedTxt:   { fontSize: 13, color: MUTED },
+  errTxt:     { fontSize: 11, color: Colors.error, fontWeight: '600', marginTop: 4 },
 
-  // Step 2
-  scroll: { padding: Spacing.screenPadding },
+  // Chips
+  chipWrap:    { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip:        { paddingHorizontal: 13, paddingVertical: 9, borderRadius: 20, borderWidth: 1.5, borderColor: BORDER, backgroundColor: '#FFF' },
+  chipOn:      { backgroundColor: Colors.primaryBg, borderColor: ORANGE },
+  chipTxt:     { fontSize: 13, fontWeight: '700', color: MUTED },
+  chipTxtOn:   { color: ORANGE },
 
-  // Selection summary bar (step 2 top)
-  selSummary:     { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, backgroundColor: '#FFF', borderRadius: 10, padding: 10, marginBottom: 4, ...Shadows.sm },
-  selSummaryItem: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: Colors.background, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
-  selSummaryTxt:  { fontSize: 12, fontWeight: '600', color: Colors.textPrimary, maxWidth: 120 },
-  changeBtn:      { marginLeft: 'auto', backgroundColor: Colors.primaryBg, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
-  changeBtnTxt:   { fontSize: 12, fontWeight: '700', color: Colors.primary },
+  // Add new button
+  addNewBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', paddingHorizontal: 12, paddingVertical: 9, borderRadius: 10, borderWidth: 1.5, borderColor: ORANGE, borderStyle: 'dashed', backgroundColor: Colors.primaryBg },
+  addNewTxt: { fontSize: 12, fontWeight: '800', color: ORANGE },
 
-  typeBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: Colors.secondaryBg, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, marginTop: 10, borderWidth: 1, borderColor: Colors.secondary + '30' },
-  typeTxt:   { fontSize: 13, color: Colors.secondary },
+  // Gate hint
+  gateHint:    { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Colors.primaryBg, borderRadius: 12, padding: 14, marginBottom: 14 },
+  gateHintTxt: { flex: 1, fontSize: 13, fontWeight: '700', color: ORANGE },
 
-  infoBox: { flexDirection: 'row', gap: 8, alignItems: 'center', backgroundColor: Colors.primaryBg, borderRadius: BorderRadius.md, padding: Spacing.md, marginBottom: Spacing.base },
-  infoTxt: { ...Typography.caption, color: Colors.primary, flex: 1, fontWeight: '600' },
-  errBox:  { flexDirection: 'row', gap: 8, alignItems: 'center', backgroundColor: Colors.errorBg, borderRadius: BorderRadius.md, padding: Spacing.md, marginBottom: Spacing.base },
-  errTxt:  { ...Typography.caption, color: Colors.error, flex: 1 },
+  // Fields
+  fieldLabel: { fontSize: 11.5, fontWeight: '700', color: MUTED, marginBottom: 6 },
+  fieldWrap:  { width: '100%' },
+  halfCol:    { width: '48%' },
+  grid:       { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
+  input:      { borderWidth: 1.5, borderColor: BORDER, borderRadius: 10, height: 46, paddingHorizontal: 12, fontSize: 14, color: Colors.textPrimary, backgroundColor: '#FFF' },
+  inputErr:   { borderColor: Colors.error },
+  selectRow:  { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  selectBox:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1.5, borderColor: BORDER, borderRadius: 10, height: 46, paddingHorizontal: 12, backgroundColor: '#FFF' },
+  selectTxt:  { fontSize: 14, fontWeight: '600', color: Colors.textPrimary, flex: 1 },
+  optAddBtn:  { width: 46, height: 46, borderRadius: 10, backgroundColor: ORANGE, alignItems: 'center', justifyContent: 'center' },
+  optAddInline: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, marginTop: 12, paddingVertical: 12, borderRadius: 10, borderWidth: 1.5, borderColor: ORANGE, borderStyle: 'dashed', backgroundColor: Colors.primaryBg },
+  optAddInlineTxt: { fontSize: 13, fontWeight: '800', color: ORANGE },
 
-  section:      { flexDirection: 'row', alignItems: 'center', marginTop: Spacing.lg, marginBottom: Spacing.md },
-  sectionBar:   { width: 3, height: 16, backgroundColor: Colors.primary, borderRadius: 2, marginRight: 8 },
-  sectionTitle: { ...Typography.h5, color: Colors.textPrimary },
+  // Images
+  imgRow:     { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  imgWrap:    { width: 74, height: 74, borderRadius: 10, overflow: 'hidden', position: 'relative' },
+  imgThumb:   { width: '100%', height: '100%', borderRadius: 10 },
+  imgRemove:  { position: 'absolute', top: 2, right: 2, width: 20, height: 20, borderRadius: 10, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
+  imgAdd:     { width: 74, height: 74, borderRadius: 10, alignItems: 'center', justifyContent: 'center', gap: 4, borderWidth: 1.5, borderStyle: 'dashed', borderColor: ORANGE, backgroundColor: Colors.primaryBg },
+  imgAddTxt:  { fontSize: 10, fontWeight: '700', color: ORANGE },
+  imgHint:    { fontSize: 11, color: MUTED, textAlign: 'right' },
 
-  imgRow:   { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  imgThumb: { width: 78, height: 78, borderRadius: 10, position: 'relative' },
-  imgImg:   { width: 78, height: 78, borderRadius: 10, borderWidth: 1, borderColor: Colors.border },
-  imgDel:   { position: 'absolute', top: -6, right: -6, width: 20, height: 20, borderRadius: 10, backgroundColor: Colors.error, alignItems: 'center', justifyContent: 'center' },
-  imgAdd:   { width: 78, height: 78, borderRadius: 10, borderWidth: 1.5, borderStyle: 'dashed', borderColor: Colors.border, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.white },
-  imgAddTxt:{ ...Typography.caption, color: Colors.textTertiary, fontSize: 10, marginTop: 2 },
+  // Save
+  saveBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: ORANGE, borderRadius: 14, paddingVertical: 16, marginTop: 4 },
+  saveBtnTxt: { color: '#FFF', fontSize: 15, fontWeight: '900' },
 
-  grid:  { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
-  g2:    { width: '48%' },
-  gFull: { width: '100%' },
-
-  priceRow: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: Colors.white, borderRadius: BorderRadius.md, paddingHorizontal: Spacing.sm, paddingTop: Spacing.base, marginBottom: Spacing.sm, ...Shadows.sm },
-  priceCol: { width: '48%' },
-
-  selWrap:   { marginBottom: Spacing.base },
-  selLabel:  { ...Typography.label, color: Colors.textSecondary, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: 11 },
-  selTrigger:{ minHeight: 48, paddingHorizontal: Spacing.base, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.border, borderRadius: BorderRadius.input },
-  selTriggerDisabled: { backgroundColor: Colors.borderLight },
-  selVal:    { ...Typography.body1, color: Colors.textPrimary, flex: 1 },
-  selPH:     { color: Colors.textTertiary },
-  disabledHint: { fontSize: 11, color: Colors.textTertiary, marginTop: 3 },
-
-  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: Colors.overlay },
-  sheet:   { maxHeight: '72%', backgroundColor: Colors.white, borderTopLeftRadius: BorderRadius['3xl'], borderTopRightRadius: BorderRadius['3xl'], paddingTop: 8, paddingBottom: 24 },
-  sheetHandle: { width: 36, height: 4, backgroundColor: Colors.border, borderRadius: 2, alignSelf: 'center', marginBottom: Spacing.base },
-  sheetHead: { minHeight: 48, flexDirection: 'row', alignItems: 'center', paddingHorizontal: Spacing.base, paddingBottom: Spacing.sm, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
-  sheetTitle: { ...Typography.h4, color: Colors.textPrimary, flex: 1 },
-  clearBtn:  { paddingHorizontal: Spacing.sm, paddingVertical: 8 },
-  clearTxt:  { ...Typography.body2, color: Colors.primary, fontWeight: '700' },
-  closeBtn:  { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
-  sheetList: { paddingHorizontal: Spacing.base },
-  sheetOpt:  { minHeight: 50, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: Spacing.md, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
-  sheetOptAct: { backgroundColor: Colors.primaryBg },
-  sheetOptTxt: { ...Typography.body1, color: Colors.textPrimary, flex: 1 },
-  sheetOptTxtAct: { color: Colors.primary, fontWeight: '700' },
-
-  searchBar:   { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: Spacing.base, marginVertical: 10, backgroundColor: Colors.background, borderRadius: BorderRadius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 12, height: 44 },
-  searchInput: { flex: 1, fontSize: 14, color: Colors.textPrimary, paddingVertical: 0 },
-  newRow:  { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: Spacing.md, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: Colors.borderLight, backgroundColor: Colors.primaryBg },
-  newIcon: { width: 28, height: 28, borderRadius: 14, backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: Colors.primary },
-  newLbl:  { fontSize: 11, color: Colors.textSecondary, fontWeight: '600' },
-  newVal:  { fontSize: 14, color: Colors.primary, fontWeight: '700', marginTop: 1 },
-  itemCode:{ fontSize: 11, color: Colors.textTertiary, marginRight: 6 },
-
-  toggleRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, backgroundColor: Colors.white, paddingHorizontal: Spacing.base, borderRadius: BorderRadius.md, marginBottom: 8, ...Shadows.sm },
-  toggleBorder:{ },
-  toggleLabel: { ...Typography.body1, color: Colors.textPrimary, fontWeight: '600' },
-
-  // CollapsibleSpec
-  collapseHeader:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: Spacing.lg, marginBottom: 0 },
-  collapseLeft:    { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 8 },
-  collapseCount:   { backgroundColor: Colors.primaryBg, borderRadius: 8, paddingHorizontal: 7, paddingVertical: 2 },
-  collapseCountTxt:{ fontSize: 10, fontWeight: '700', color: Colors.primary },
-  collapseBtn:     { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: Colors.primary, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 6 },
-  collapseBtnOpen: { backgroundColor: Colors.success },
-  collapseBtnTxt:  { fontSize: 12, fontWeight: '700', color: '#FFF' },
-  collapseBody:    { backgroundColor: Colors.white, borderRadius: 12, padding: 14, marginTop: 8, ...Shadows.sm },
-  collapseDoneBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: Colors.success, borderRadius: 10, paddingVertical: 10, marginTop: 10 },
-  collapseDoneTxt: { fontSize: 13, fontWeight: '700', color: '#FFF' },
-
-  // Product type cards (Step 1)
-  typeSection:     { marginTop: Spacing.base, marginBottom: 4 },
-  typeSectionHead: { marginBottom: 8 },
-  typeSectionTitle:{ fontSize: 13, fontWeight: '800', color: Colors.textPrimary },
-  typeSectionSub:  { fontSize: 10, color: Colors.textTertiary, marginTop: 2 },
-  typeCardRow:     { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  typeCard:        { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 20, borderWidth: 1.5, borderColor: Colors.border, backgroundColor: Colors.white, position: 'relative' },
-  typeCardIcon:    { width: 20, height: 20, borderRadius: 5, alignItems: 'center', justifyContent: 'center' },
-  typeCardLabel:   { fontSize: 11, fontWeight: '600', color: Colors.textSecondary },
-  typeCardCheck:   { width: 14, height: 14, borderRadius: 7, alignItems: 'center', justifyContent: 'center', marginLeft: 2 },
+  // Modals
+  overlay:      { flex: 1, backgroundColor: 'rgba(15,22,38,0.55)', justifyContent: 'center', padding: 24 },
+  modalCard:    { backgroundColor: '#FFF', borderRadius: 18, padding: 20 },
+  modalTitle:   { fontSize: 16, fontWeight: '900', color: Colors.textPrimary, marginBottom: 14 },
+  modalInput:   { borderWidth: 1.5, borderColor: BORDER, borderRadius: 12, height: 48, paddingHorizontal: 14, fontSize: 15, color: Colors.textPrimary, backgroundColor: '#F8FAFC', marginBottom: 4 },
+  modalBtnRow:  { flexDirection: 'row', gap: 10, marginTop: 16 },
+  btnGhost:     { flex: 1, height: 46, borderRadius: 12, borderWidth: 1.5, borderColor: BORDER, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F8FAFC' },
+  btnGhostTxt:  { fontSize: 14, fontWeight: '800', color: MUTED },
+  btnPrimary:   { flex: 1, height: 46, borderRadius: 12, backgroundColor: ORANGE, alignItems: 'center', justifyContent: 'center' },
+  btnPrimaryTxt:{ fontSize: 14, fontWeight: '900', color: '#FFF' },
+  optRow:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 13, paddingHorizontal: 12, borderRadius: 10 },
+  optRowOn:     { backgroundColor: Colors.primaryBg },
+  optTxt:       { fontSize: 15, color: Colors.textPrimary },
 });

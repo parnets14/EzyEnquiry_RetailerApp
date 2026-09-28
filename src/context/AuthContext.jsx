@@ -1,5 +1,11 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { authApi, session } from '../utils/api';
+import {
+  requestPermission,
+  registerFcmToken,
+  clearFcmToken,
+  createNotificationChannels,
+} from '../services/notificationService';
 
 /**
  * AuthContext — single source of truth for the logged-in user.
@@ -41,6 +47,18 @@ export function AuthProvider({ children }) {
     })();
   }, []);
 
+  // Register FCM token whenever user becomes logged in
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        await createNotificationChannels();
+        const granted = await requestPermission();
+        if (granted) await registerFcmToken();
+      } catch { /* non-fatal */ }
+    })();
+  }, [user?._id]);
+
   // Called by Login / OTP screens after session.save
   const setUser = useCallback((u) => setUserState(u), []);
 
@@ -63,6 +81,7 @@ export function AuthProvider({ children }) {
     } catch (error) {
       console.warn('[Auth] Backend logout failed:', error.message);
     } finally {
+      await clearFcmToken();
       await session.clear();
       setUserState(null);
     }

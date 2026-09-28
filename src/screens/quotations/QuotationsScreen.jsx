@@ -14,6 +14,7 @@ import EmptyState from '../../components/common/EmptyState';
 import { formatDate, formatCurrency } from '../../utils/formatters';
 import { getQuotationStatusLabel } from '../../utils/statusHelpers';
 import { enquiryApi, notificationApi } from '../../utils/api';
+import { goToSearch } from '../../utils/navigation';
 import { SCREENS } from '../../constants';
 
 const TABS = ['All', 'New', 'Viewed', 'Replied', 'Negotiation', 'Confirmed', 'Cancelled'];
@@ -157,7 +158,7 @@ export default function QuotationsScreen({ navigation }) {
           title="No Quotations"
           message={`You have no ${activeTab !== 'All' ? activeTab.toLowerCase() + ' ' : ''}quotations yet. Send an enquiry to create one.`}
           buttonTitle="SEARCH PRODUCTS"
-          onButtonPress={() => navigation.navigate(SCREENS.SEARCH)}
+          onButtonPress={() => goToSearch(navigation)}
         />
       ) : (
         <FlatList

@@ -321,9 +321,10 @@ export const myProductApi = {
   create(fields = {}, images = []) {
     const form = new FormData();
     Object.entries(fields).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && value !== '') {
-        form.append(key, typeof value === 'boolean' ? String(value) : value);
-      }
+      if (value === undefined || value === null || value === '') return;
+      if (typeof value === 'boolean') form.append(key, String(value));
+      else if (typeof value === 'object') form.append(key, JSON.stringify(value)); // e.g. attributes {}
+      else form.append(key, value);
     });
     images.forEach((img, idx) => {
       form.append('file', {
@@ -338,9 +339,10 @@ export const myProductApi = {
   update(id, fields = {}, images = [], existingImageUrls = []) {
     const form = new FormData();
     Object.entries(fields).forEach(([key, value]) => {
-      if (value !== undefined && value !== null) {
-        form.append(key, typeof value === 'boolean' ? String(value) : value);
-      }
+      if (value === undefined || value === null) return;
+      if (typeof value === 'boolean') form.append(key, String(value));
+      else if (typeof value === 'object') form.append(key, JSON.stringify(value)); // e.g. attributes {}
+      else form.append(key, value);
     });
     form.append('image_urls', JSON.stringify(existingImageUrls));
     images.forEach((img, idx) => {
@@ -367,6 +369,12 @@ export const notificationApi = {
   },
   remove(id) {
     return request(`${RETAILER_BASE}/notifications/${id}`, { method: 'DELETE', auth: true });
+  },
+  /** Register (or refresh) the device FCM push token with the backend. */
+  registerFcmToken(token, deviceInfo = '') {
+    return request(`${RETAILER_AUTH_BASE}/fcm-token`, {
+      method: 'POST', auth: true, body: { token, deviceInfo },
+    });
   },
 };
 
@@ -482,6 +490,15 @@ export const staffApi = {
   /** GET /api/retailer/staff/:id */
   get(id) {
     return request(`${RETAILER_BASE}/staff/${id}`, { auth: true });
+  },
+  /**
+   * GET /api/retailer/staff/:id/incentive
+   * Current-month sales + earned incentive for one staff member.
+   * Sales are matched on the staff name recorded against orders (see the
+   * controller) — `basis` in the response says how it was derived.
+   */
+  incentive(id) {
+    return request(`${RETAILER_BASE}/staff/${id}/incentive`, { auth: true });
   },
   /** POST /api/retailer/staff */
   create(body) {

@@ -142,7 +142,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     ...Shadows.sm,
   },
-  cardCompact: { flex: 1 },
+  cardCompact: { flex: 1, flexDirection: 'column' },
 
   imageContainer: { position: 'relative', height: 160, backgroundColor: Colors.background },
   imageContainerCompact: { height: 130 },
@@ -164,7 +164,7 @@ const styles = StyleSheet.create({
   imageCountText: { color: Colors.white, fontSize: 10, fontWeight: '600' },
 
   content: { padding: Spacing.base },
-  contentCompact: { padding: 10, flex: 1 },
+  contentCompact: { padding: 10, flex: 1, flexDirection: 'column' },
   topBlock: { flex: 1 },
 
   category: {

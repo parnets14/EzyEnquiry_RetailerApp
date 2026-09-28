@@ -10,6 +10,7 @@ import { Shadows } from '../../theme/spacing';
 import { useAuth } from '../../context/AuthContext';
 import { dashboardApi } from '../../utils/api';
 import { getGreeting, formatCurrency } from '../../utils/formatters';
+import { makeCan, isStaffAccount as isStaff } from '../../utils/moduleAccess';
 import { SCREENS } from '../../constants';
 
 export default function HomeScreen({ navigation }) {
@@ -45,6 +46,23 @@ export default function HomeScreen({ navigation }) {
   const unread       = counts.unread_notifications || 0;
 
   const initials = ownerName.split(' ').map(w => w.charAt(0)).slice(0, 2).join('').toUpperCase();
+
+  // ── Module access (RetailerStaff see only the modules their owner ticked) ──
+  const can = makeCan(user);
+
+  // Quick actions, each gated by a module key. Owner sees all.
+  // NOTE: only routes that actually exist in this app's navigator are listed here.
+  const QUICK_ACTIONS = [
+    { key: 'search',      module: 'products',      icon: 'search',        label: 'Search',      color: '#2980B9', bg: '#EBF5FB', go: () => navigation.navigate(SCREENS.SEARCH) },
+    { key: 'add-product', module: 'products',      icon: 'add-circle',    label: 'Add Product', color: '#27AE60', bg: '#E8F8EF', go: () => navigation.navigate(SCREENS.ADD_PRODUCT) },
+    { key: 'quotations',  module: 'enquiries',     icon: 'document-text', label: 'Quotations',  color: '#8E44AD', bg: '#F5EEF8', go: () => navigation.navigate(SCREENS.QUOTATIONS) },
+    { key: 'orders',      module: 'orders',        icon: 'cart',          label: 'Orders',      color: '#0891B2', bg: '#ECFEFF', go: () => navigation.navigate(SCREENS.ORDERS) },
+    { key: 'invoices',    module: 'invoices',      icon: 'receipt',       label: 'Invoices',    color: '#E67E22', bg: '#FDF0E4', go: () => navigation.navigate(SCREENS.INVOICES) },
+  ];
+  const quickActions = QUICK_ACTIONS.filter(a => can(a.module));
+
+  // Staff are managed by the owner only — hide the card for staff accounts.
+  const canManageStaff = !isStaff(user);
 
   const STATUS_COLOR = {
     Delivered:          '#27AE60',
@@ -129,6 +147,10 @@ export default function HomeScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
+        {/* ─── Overview (always first) ───────────────────────────────────
+            The stat grid is the primary at-a-glance summary, so it leads the
+            page. While the dashboard API is in flight or has failed we swap in
+            the loading / error card, then Quick Actions still render below. */}
         {loading ? (
           <View style={st.loadingBox}>
             <ActivityIndicator color={Colors.primary} />
@@ -152,37 +174,47 @@ export default function HomeScreen({ navigation }) {
               <OverviewCard icon="card-outline" label="Pending Pay" value={counts.pending_payments ?? 0} sub={counts.pending_amount ? formatCurrency(counts.pending_amount) : ''} color="#C0392B" bg="#FDEDEC" onPress={() => navigation.navigate(SCREENS.INVOICES)} />
               <OverviewCard icon="notifications-outline" label="Alerts" value={unread} color="#2980B9" bg="#EBF5FB" onPress={() => navigation.navigate(SCREENS.NOTIFICATIONS)} />
             </View>
+          </>
+        )}
 
-            {/* ─── Quick Actions ─── */}
+        {/* ─── Quick Actions ─────────────────────────────────────────────
+            Rendered OUTSIDE the loading/error gate on purpose: staff must be
+            able to reach Search / Add Product even if the dashboard API is slow
+            or down. Each tile is filtered by the staff member's module access. */}
+        {quickActions.length > 0 && (
+          <>
             <Text style={st.secTitle}>Quick Actions</Text>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={st.quickRow}
             >
-              <QA icon="search"         label="Search"      color="#2980B9" bg="#EBF5FB" onPress={() => navigation.navigate(SCREENS.SEARCH)} />
-              <QA icon="cube"           label="Products"    color={Colors.primary} bg="#FFF3EE" onPress={() => navigation.navigate(SCREENS.MY_PRODUCTS)} />
-              <QA icon="add-circle"     label="Add Product" color="#27AE60" bg="#E8F8EF" onPress={() => navigation.navigate(SCREENS.ADD_PRODUCT)} />
-              <QA icon="document-text"  label="Quotations"  color="#8E44AD" bg="#F5EEF8" onPress={() => navigation.navigate(SCREENS.QUOTATIONS)} />
-              <QA icon="receipt"        label="Invoices"    color="#E67E22" bg="#FDF0E4" onPress={() => navigation.navigate(SCREENS.INVOICES)} />
+              {quickActions.map(a => (
+                <QA key={a.key} icon={a.icon} label={a.label} color={a.color} bg={a.bg} onPress={a.go} />
+              ))}
             </ScrollView>
+          </>
+        )}
 
-            {/* ─── Staff Management ─── */}
-            <View style={st.staffCard}>
-              <View style={st.staffCardLeft}>
-                <View style={st.staffCardIcon}>
-                  <Ionicons name="people-outline" size={22} color={Colors.secondary} />
+        {!loading && !error && (
+          <>
+            {/* ─── Staff Management (owner only) ─── */}
+            {canManageStaff && (
+              <View style={st.staffCard}>
+                <View style={st.staffCardLeft}>
+                  <View style={st.staffCardIcon}>
+                    <Ionicons name="people-outline" size={22} color={Colors.secondary} />
+                  </View>
+                  <View>
+                    <Text style={st.staffCardTitle}>My Staff</Text>
+                    <Text style={st.staffCardSub}>Manage staff access & salary</Text>
+                  </View>
                 </View>
-                <View>
-                  <Text style={st.staffCardTitle}>My Staff</Text>
-                  <Text style={st.staffCardSub}>Manage staff access & salary</Text>
-                </View>
-              </View>
-              <TouchableOpacity
-                style={st.staffAddBtn}
-                onPress={() => navigation.navigate(SCREENS.STAFF_ADD_EDIT)}
-              >
-                <Ionicons name="person-add-outline" size={14} color="#FFF" />
+                <TouchableOpacity
+                  style={st.staffAddBtn}
+                  onPress={() => navigation.navigate(SCREENS.STAFF_ADD_EDIT)}
+                >
+                  <Ionicons name="person-add-outline" size={14} color="#FFF" />
                 <Text style={st.staffAddBtnTxt}>Add Staff</Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -192,7 +224,8 @@ export default function HomeScreen({ navigation }) {
                 <Text style={st.staffViewBtnTxt}>View All</Text>
                 <Ionicons name="chevron-forward" size={14} color={Colors.secondary} />
               </TouchableOpacity>
-            </View>
+              </View>
+            )}
 
             {/* ─── Recent Orders ─── */}
             {recentOrders.length > 0 && (

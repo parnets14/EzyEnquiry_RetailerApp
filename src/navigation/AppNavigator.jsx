@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -10,6 +10,7 @@ import { Colors } from '../theme/colors';
 import { Typography } from '../theme/typography';
 import { Shadows } from '../theme/spacing';
 import { SCREENS } from '../constants';
+import { setNavigationRef } from '../services/notificationService';
 
 // Auth Screens
 import SplashScreen from '../screens/auth/SplashScreen';
@@ -29,6 +30,7 @@ import ProfileScreen from '../screens/profile/ProfileScreen';
 import ProductDetailsScreen from '../screens/products/ProductDetailsScreen';
 import SearchResultsScreen from '../screens/products/SearchResultsScreen';
 import AddProductScreen from '../screens/products/AddProductScreen';
+import CategoriesBrandsScreen from '../screens/products/CategoriesBrandsScreen';
 import MyProductsScreen from '../screens/products/MyProductsScreen';
 
 // Enquiry Screens
@@ -142,8 +144,10 @@ const MainTabs = () => (
 );
 
 // ─── Root Stack ─────────────────────────────────────────────────────────────────
+export const navigationRef = React.createRef();
+
 const AppNavigator = React.forwardRef((props, ref) => (
-  <NavigationContainer ref={ref}>
+  <NavigationContainer ref={ref || navigationRef} onReady={() => setNavigationRef(ref || navigationRef)}>
     <Stack.Navigator
       initialRouteName={SCREENS.SPLASH}
       screenOptions={{ headerShown: false, animation: 'slide_from_right' }}
@@ -167,6 +171,10 @@ const AppNavigator = React.forwardRef((props, ref) => (
       <Stack.Screen
         name={SCREENS.SEARCH_RESULTS}
         component={SearchResultsScreen}
+      />
+      <Stack.Screen
+        name={SCREENS.CATEGORIES_BRANDS}
+        component={CategoriesBrandsScreen}
       />
       <Stack.Screen
         name={SCREENS.ADD_PRODUCT}

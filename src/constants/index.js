@@ -3,9 +3,10 @@ export const APP_TAGLINE = 'Find Stock Instantly';
 
 // Auth Storage Keys
 export const STORAGE_KEYS = {
-  AUTH_TOKEN: '@ezy_auth_token',
-  USER_DATA: '@ezy_user_data',
-  IS_LOGGED_IN: '@ezy_is_logged_in',
+  AUTH_TOKEN:  '@ezy_auth_token',
+  USER_DATA:   '@ezy_user_data',
+  IS_LOGGED_IN:'@ezy_is_logged_in',
+  FCM_TOKEN:   '@ezy_fcm_token',
 };
 
 // Enquiry Statuses
@@ -88,6 +89,7 @@ export const SCREENS = {
   PRODUCT_DETAILS: 'ProductDetails',
   SEARCH_RESULTS: 'SearchResults',
   ADD_PRODUCT: 'AddProduct',
+  CATEGORIES_BRANDS: 'CategoriesBrands',
   MY_PRODUCTS: 'MyProducts',
 
   // Enquiry

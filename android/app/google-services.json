@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "19906707035",
+    "project_id": "retailer-app-62ed3",
+    "storage_bucket": "retailer-app-62ed3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:19906707035:android:7f72d412727eba7fe3497e",
+        "android_client_info": {
+          "package_name": "com.retailerapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBkEGVXEMypd4jrFVKOSEHME5i6ow-4-rs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -169,11 +169,12 @@ const SearchScreen = ({ navigation }) => {
             <Text style={styles.headerSub}>Browse products from sellers</Text>
           </View>
           <TouchableOpacity
-            style={styles.addBtn}
-            onPress={() => navigation.navigate(SCREENS.MY_PRODUCTS)}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={styles.addProductBtn}
+            onPress={() => navigation.navigate(SCREENS.CATEGORIES_BRANDS)}
+            activeOpacity={0.85}
           >
-            <Ionicons name="grid-outline" size={24} color="#FFF" />
+            <Ionicons name="add" size={15} color="#FFF" />
+            <Text style={styles.addProductBtnTxt}>Add</Text>
           </TouchableOpacity>
         </View>
 
@@ -253,6 +254,7 @@ const SearchScreen = ({ navigation }) => {
                 onPress={() => openProduct(item)}
                 onMenuPress={item.canManage ? openProductMenu : undefined}
                 compact
+                style={styles.cardStretch}
               />
             </View>
           )}
@@ -296,17 +298,20 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.base,
     borderBottomLeftRadius: 20,
     borderBottomRightRadius: 20,
+    zIndex: 10,
+    elevation: 4,
   },
   headerTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   backBtn: { width: 32, height: 32, alignItems: 'flex-start', justifyContent: 'center' },
-  addBtn: { width: 32, height: 32, alignItems: 'flex-end', justifyContent: 'center' },
+  addProductBtn:    { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: Colors.primary, borderRadius: 16, paddingHorizontal: 11, paddingVertical: 6 },
+  addProductBtnTxt: { fontSize: 12, fontWeight: '800', color: '#FFF' },
   headerTitleWrap: { flex: 1, alignItems: 'center' },
   headerTitle: { ...Typography.h3, color: Colors.white, textAlign: 'center' },
   headerSub: { ...Typography.caption, color: 'rgba(255,255,255,0.55)', marginTop: 2, textAlign: 'center' },
 
   searchWrap: { marginTop: Spacing.base },
 
-  list: { padding: Spacing.screenPadding, paddingTop: Spacing.base, paddingBottom: 100 },
+  list: { padding: Spacing.screenPadding, paddingTop: Spacing['3xl'], paddingBottom: 100 },
   catalogHeader: { marginBottom: 14 },
   resultRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12,
@@ -322,8 +327,9 @@ const styles = StyleSheet.create({
   filterChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   filterChipText: { ...Typography.caption, color: Colors.textSecondary, fontWeight: '600' },
   filterChipTextActive: { color: Colors.white },
-  columnWrapper: { justifyContent: 'space-between', marginBottom: 12 },
-  cardCol: { width: '48.5%' },
+  columnWrapper: { justifyContent: 'space-between', alignItems: 'stretch', marginBottom: 12 },
+  cardCol: { width: '48.5%', flexDirection: 'column' },
+  cardStretch: { flex: 1 },
   loadMore: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 18,
   },

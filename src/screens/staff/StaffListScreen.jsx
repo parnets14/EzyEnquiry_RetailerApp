@@ -36,6 +36,8 @@ function StaffCard({ item, onEdit, onToggle, onDelete }) {
 
   return (
     <View style={st.card}>
+      {/* Tappable body — opens Edit, matching the wholesaler's card-wide tap */}
+      <TouchableOpacity activeOpacity={0.85} onPress={() => onEdit(item)}>
       {/* Top row */}
       <View style={st.cardTop}>
         <View style={[st.avatar, !item.is_active && st.avatarInactive]}>
@@ -73,21 +75,33 @@ function StaffCard({ item, onEdit, onToggle, onDelete }) {
         </View>
       </View>
 
+      {/* Role access badge + incentive slab count (mirrors the wholesaler list) */}
+      {(!!item.role_access || (Array.isArray(bd.incentive_slabs) && bd.incentive_slabs.length > 0)) && (
+        <View style={st.tagRow}>
+          {!!item.role_access && (
+            <View style={st.roleBadge}>
+              <Ionicons name="shield-key-outline" size={11} color={Colors.primary} />
+              <Text style={st.roleBadgeTxt}>{item.role_access}</Text>
+            </View>
+          )}
+          {Array.isArray(bd.incentive_slabs) && bd.incentive_slabs.length > 0 && (
+            <View style={st.slabPill}>
+              <Ionicons name="pulse-outline" size={11} color="#8E44AD" />
+              <Text style={st.slabPillTxt}>
+                {bd.incentive_slabs.length} slab{bd.incentive_slabs.length > 1 ? 's' : ''}
+              </Text>
+            </View>
+          )}
+        </View>
+      )}
+
       {/* Salary info */}
-      {(bd.fixed_salary > 0 || bd.incentive_type !== 'none' || bd.sales_percentage > 0) && (
+      {(bd.fixed_salary > 0 || bd.sales_percentage > 0) && (
         <View style={st.salaryRow}>
           {bd.fixed_salary > 0 && (
             <View style={st.salaryChip}>
               <Ionicons name="wallet-outline" size={11} color="#27AE60" />
               <Text style={[st.salaryChipTxt, { color: '#27AE60' }]}>₹{bd.fixed_salary}/mo</Text>
-            </View>
-          )}
-          {bd.incentive_type !== 'none' && bd.incentive_value > 0 && (
-            <View style={st.salaryChip}>
-              <Ionicons name="trending-up-outline" size={11} color="#8E44AD" />
-              <Text style={[st.salaryChipTxt, { color: '#8E44AD' }]}>
-                {bd.incentive_type === 'percentage' ? `${bd.incentive_value}% bonus` : `₹${bd.incentive_value} bonus`}
-              </Text>
             </View>
           )}
           {bd.sales_percentage > 0 && (
@@ -122,6 +136,7 @@ function StaffCard({ item, onEdit, onToggle, onDelete }) {
           <Ionicons name="shield-checkmark-outline" size={11} color={Colors.success} /> Full access (all modules)
         </Text>
       )}
+      </TouchableOpacity>
 
       {/* Actions */}
       <View style={st.cardActions}>
@@ -383,6 +398,13 @@ const st = StyleSheet.create({
   modulesRow:   { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginBottom: 10 },
   modulePill:   { backgroundColor: Colors.secondaryBg, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
   modulePillTxt:{ fontSize: 10, fontWeight: '600', color: Colors.secondary },
+
+  // Role access badge + incentive slab count
+  tagRow:      { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 8 },
+  roleBadge:   { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: Colors.primaryBg, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  roleBadgeTxt:{ fontSize: 10.5, fontWeight: '800', color: Colors.primary },
+  slabPill:    { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#F5EEF8', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  slabPillTxt: { fontSize: 10.5, fontWeight: '800', color: '#8E44AD' },
   fullAccessTxt:{ fontSize: 11, color: Colors.success, marginBottom: 10 },
 
   // Card action buttons

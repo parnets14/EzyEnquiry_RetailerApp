@@ -8,7 +8,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { Colors } from '../../theme/colors';
 import { Shadows } from '../../theme/spacing';
-import { staffApi, myProductApi } from '../../utils/api';
+import { staffApi, myProductApi, productApi } from '../../utils/api';
 
 // ─── Retailer App modules ─────────────────────────────────────
 const RETAILER_MODULES = [
@@ -23,7 +23,27 @@ const RETAILER_MODULES = [
 ];
 const ALL_KEYS = RETAILER_MODULES.map(m => m.key);
 
-const fmt = n => Number(n) > 0 ? `\u20B9${Number(n).toLocaleString('en-IN')}` : '\u2014';
+// ─── Preset role access ───────────────────────────────────────
+// Mirrors the wholesaler's STAFF_ROLES list, adapted to what staff do in the
+// Retailer App. Picking a preset fills the designation; picking a module set
+// still controls actual permissions. Owners can also add a custom name.
+const STAFF_ROLES = [
+  { key: 'Manager',         label: 'Manager',         desc: 'Orders, Enquiries, Customers, Invoices' },
+  { key: 'Accountant',      label: 'Accountant',      desc: 'Invoices, Reports, Payments' },
+  { key: 'Sales Executive', label: 'Sales Executive', desc: 'Enquiries, Orders, Customers' },
+  { key: 'Store Keeper',    label: 'Store Keeper',    desc: 'Products, Orders' },
+];
+
+// Suggested module set per preset role — applied when a preset is picked.
+const ROLE_MODULES = {
+  'Manager':         ['dashboard', 'products', 'enquiries', 'orders', 'invoices', 'customers', 'notifications', 'reports'],
+  'Accountant':      ['dashboard', 'invoices', 'reports', 'notifications'],
+  'Sales Executive': ['dashboard', 'products', 'enquiries', 'orders', 'customers', 'notifications'],
+  'Store Keeper':    ['dashboard', 'products', 'orders', 'notifications'],
+};
+
+const fmt    = n => Number(n) > 0 ? `\u20B9${Number(n).toLocaleString('en-IN')}` : '\u2014';
+const fmtAmt = n => Number(n) > 0 ? `\u20B9${Number(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}` : null;
 
 // ── Shared UI ─────────────────────────────────────────────────
 function SH({ icon, title, color = Colors.secondary }) {
@@ -60,109 +80,200 @@ function Inp({ value, onChangeText, placeholder, keyboardType, editable = true, 
 }
 
 // ── Module checkbox row ───────────────────────────────────────
-function ModRow({ mod, checked, onToggle }) {
-  return (
-    <TouchableOpacity style={[st.modRow, checked && st.modRowOn]} onPress={onToggle} activeOpacity={0.8}>
-      <View style={[st.modIcon, { backgroundColor: mod.color + '18' }]}>
-        <Ionicons name={mod.icon} size={15} color={mod.color} />
-      </View>
-      <View style={st.modMeta}>
-        <Text style={[st.modName, checked && { color: Colors.textPrimary }]}>{mod.label}</Text>
-        <Text style={st.modDesc} numberOfLines={1}>{mod.description}</Text>
-      </View>
-      <View style={[st.cb, checked && st.cbOn]}>
-        {checked && <Ionicons name="checkmark" size={11} color="#FFF" />}
-      </View>
-    </TouchableOpacity>
-  );
-}
-
-// ── Product picker bottom sheet ───────────────────────────────
-function ProductPicker({ products, selectedIds, onDone }) {
+// ══════════════════════════════════════════════════════════════
+// ProductDiscountList — flat Item / Max % table (wholesaler parity)
+// productDiscounts: [{ id, name, code, mrp, retailPrice, discount }]
+// ══════════════════════════════════════════════════════════════
+function ProductDiscountList({ products, productsLoading, productDiscounts, onChange }) {
   const [vis, setVis] = useState(false);
-  const [sel, setSel] = useState(() => new Set(selectedIds));
   const [q,   setQ]   = useState('');
   const insets = useSafeAreaInsets();
 
-  useEffect(() => { if (vis) setSel(new Set(selectedIds)); }, [vis]);
+  const addedIds = new Set(productDiscounts.map(d => d.id));
 
-  const filtered = q.trim()
-    ? products.filter(p => (p.name || '').toLowerCase().includes(q.toLowerCase()) ||
+  const filtered = (q.trim()
+    ? products.filter(p =>
+        (p.name || '').toLowerCase().includes(q.toLowerCase()) ||
         (p.code || '').toLowerCase().includes(q.toLowerCase()))
-    : products;
+    : products
+  ).filter(p => !addedIds.has(p.id || p._id));
 
-  const toggle = id => setSel(prev => {
-    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
-  });
+  const addProduct = (p) => {
+    const id = p.id || p._id;
+    if (addedIds.has(id)) return;
+    onChange([...productDiscounts, {
+      id,
+      name:        p.name        || '',
+      code:        p.code        || '',
+      mrp:         p.mrp         || 0,
+      retailPrice: p.retailPrice || 0,
+      discount:    '',
+    }]);
+    setVis(false);
+    setQ('');
+  };
 
-  const names = products
-    .filter(p => selectedIds.includes(p.id || p._id))
-    .map(p => p.name).join(', ');
+  const removeProduct = (id) => onChange(productDiscounts.filter(d => d.id !== id));
+
+  const updateDiscount = (id, val) =>
+    onChange(productDiscounts.map(d =>
+      d.id === id ? { ...d, discount: val.replace(/[^0-9.]/g, '') } : d
+    ));
 
   return (
-    <View style={st.field}>
-      <Text style={st.fLabel}>Products with Discount Access</Text>
-      <TouchableOpacity style={st.prodTrig} onPress={() => setVis(true)} activeOpacity={0.8}>
-        <Text style={[st.prodTrigTxt, !names && { color: Colors.textTertiary }]} numberOfLines={2}>
-          {names || 'All products (no restriction)'}
-        </Text>
-        <Ionicons name="chevron-down" size={15} color={Colors.textTertiary} />
-      </TouchableOpacity>
-      <Text style={st.hint}>Leave empty = discount applies to all products</Text>
+    <View style={{ gap: 10 }}>
 
-      <Modal visible={vis} transparent animationType="slide" onRequestClose={() => setVis(false)}>
+      <Text style={st.hint}>
+        Choose items this staff member can offer a discount on, then set the
+        maximum discount % allowed per item. Staff cannot exceed these limits.
+        This is private to the staff profile — customers never see it.
+      </Text>
+
+      {/* Header row — mirrors the wholesaler's slabHead */}
+      {productDiscounts.length > 0 && (
+        <View style={st.slabHead}>
+          <Text style={[st.slabHeadTxt, { flex: 2 }]}>Item</Text>
+          <Text style={[st.slabHeadTxt, { flex: 1, textAlign: 'center' }]}>Max %</Text>
+          <View style={{ width: 30 }} />
+        </View>
+      )}
+
+      {productDiscounts.map((d) => (
+        <View key={d.id} style={st.authRow}>
+          <View style={{ flex: 2, paddingRight: 8 }}>
+            <Text style={st.authName} numberOfLines={1}>{d.name || 'Item'}</Text>
+            {!!d.code && <Text style={st.authCode}>{d.code}</Text>}
+          </View>
+          <TextInput
+            style={[st.slabInput, { flex: 1, textAlign: 'center' }]}
+            value={d.discount}
+            onChangeText={v => updateDiscount(d.id, v)}
+            keyboardType="decimal-pad"
+            placeholder="10"
+            placeholderTextColor={Colors.textTertiary}
+            maxLength={5}
+          />
+          <TouchableOpacity
+            style={st.slabDel}
+            onPress={() => removeProduct(d.id)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close-circle" size={20} color={Colors.border} />
+          </TouchableOpacity>
+        </View>
+      ))}
+
+      <TouchableOpacity style={st.addSlabBtn} onPress={() => setVis(true)} activeOpacity={0.8}>
+        <Ionicons name="add" size={15} color={Colors.primary} />
+        <Text style={st.addSlabTxt}>Select Items</Text>
+      </TouchableOpacity>
+
+      {/* ── Product picker bottom sheet ── */}
+      <Modal
+        visible={vis}
+        transparent
+        animationType="slide"
+        onRequestClose={() => { setVis(false); setQ(''); }}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <TouchableWithoutFeedback onPress={() => setVis(false)}>
+          <TouchableWithoutFeedback onPress={() => { setVis(false); setQ(''); }}>
             <View style={st.sheetOverlay}>
               <TouchableWithoutFeedback>
                 <View style={st.sheet}>
                   <View style={st.sheetHandle} />
+
+                  {/* Sheet header */}
                   <View style={st.sheetHead}>
-                    <Text style={st.sheetTitle}>Select Products</Text>
-                    <TouchableOpacity onPress={() => setSel(new Set())} style={{ paddingHorizontal: 10 }}>
-                      <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.primary }}>Clear</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => setVis(false)} style={st.sheetClose}>
+                    <View>
+                      <Text style={st.sheetTitle}>Select Product</Text>
+                      <Text style={st.sheetSubtitle}>
+                        {products.length - addedIds.size} available · {addedIds.size} already added
+                      </Text>
+                    </View>
+                    <TouchableOpacity onPress={() => { setVis(false); setQ(''); }} style={st.sheetClose}>
                       <Ionicons name="close" size={20} color={Colors.textSecondary} />
                     </TouchableOpacity>
                   </View>
+
+                  {/* Search */}
                   <View style={st.sheetSearch}>
                     <Ionicons name="search-outline" size={14} color={Colors.textTertiary} />
-                    <TextInput style={st.sheetSI} value={q} onChangeText={setQ} autoFocus
-                      placeholder="Search products…" placeholderTextColor={Colors.textTertiary} />
+                    <TextInput
+                      style={st.sheetSI}
+                      value={q}
+                      onChangeText={setQ}
+                      autoFocus
+                      placeholder="Search by name or code…"
+                      placeholderTextColor={Colors.textTertiary}
+                    />
+                    {q.length > 0 && (
+                      <TouchableOpacity onPress={() => setQ('')}>
+                        <Ionicons name="close-circle" size={15} color={Colors.textTertiary} />
+                      </TouchableOpacity>
+                    )}
                   </View>
-                  <ScrollView style={{ maxHeight: 340 }} showsVerticalScrollIndicator={false}>
-                    {filtered.map(p => {
-                      const id = p.id || p._id;
-                      const on = sel.has(id);
-                      return (
-                        <TouchableOpacity key={id}
-                          style={[st.prodRow, on && st.prodRowOn]} onPress={() => toggle(id)}>
-                          <View style={{ flex: 1 }}>
-                            <Text style={st.prodName} numberOfLines={1}>{p.name}</Text>
-                            {p.code ? <Text style={st.prodCode}>{p.code}</Text> : null}
-                          </View>
-                          <View style={[st.cb, on && st.cbOn]}>
-                            {on && <Ionicons name="checkmark" size={11} color="#FFF" />}
-                          </View>
-                        </TouchableOpacity>
-                      );
-                    })}
-                    {filtered.length === 0 && (
-                      <View style={{ padding: 24, alignItems: 'center' }}>
-                        <Text style={{ color: Colors.textTertiary, fontSize: 13 }}>No products found</Text>
+
+                  {/* Product list */}
+                  <ScrollView
+                    style={{ maxHeight: 380 }}
+                    showsVerticalScrollIndicator={false}
+                    keyboardShouldPersistTaps="handled">
+                    {filtered.length === 0 ? (
+                      <View style={{ padding: 32, alignItems: 'center', gap: 8 }}>
+                        {productsLoading ? (
+                          <ActivityIndicator size="small" color={Colors.primary} />
+                        ) : (
+                          <>
+                            <Ionicons name="cube-outline" size={28} color={Colors.border} />
+                            <Text style={{ color: Colors.textTertiary, fontSize: 13, textAlign: 'center' }}>
+                              {products.length === 0
+                                ? 'No products in catalogue'
+                                : q.trim()
+                                  ? 'No products match your search'
+                                  : 'All products already added'}
+                            </Text>
+                          </>
+                        )}
                       </View>
+                    ) : (
+                      filtered.map(p => {
+                        const id       = p.id || p._id;
+                        const hasMrp   = p.mrp > 0;
+                        const hasRetail= p.retailPrice > 0;
+                        return (
+                          <TouchableOpacity
+                            key={id}
+                            style={st.sheetProdRow}
+                            onPress={() => addProduct(p)}
+                            activeOpacity={0.75}>
+                            {/* Left icon */}
+                            <View style={st.sheetProdIcon}>
+                              <Ionicons name="cube-outline" size={16} color={Colors.primary} />
+                            </View>
+                            {/* Info */}
+                            <View style={{ flex: 1 }}>
+                              <Text style={st.prodName} numberOfLines={1}>{p.name}</Text>
+                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 3 }}>
+                                {p.code ? (
+                                  <Text style={st.prodCode}>{p.code}</Text>
+                                ) : null}
+                                {hasMrp && (
+                                  <Text style={st.sheetProdMrp}>MRP {fmtAmt(p.mrp)}</Text>
+                                )}
+                                {!hasMrp && hasRetail && (
+                                  <Text style={st.sheetProdMrp}>₹{fmtAmt(p.retailPrice)}</Text>
+                                )}
+                              </View>
+                            </View>
+                            {/* Add icon */}
+                            <View style={st.sheetProdAdd}>
+                              <Ionicons name="add" size={14} color={Colors.primary} />
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })
                     )}
                   </ScrollView>
-                  <View style={[st.sheetDoneRow, { paddingBottom: Math.max(insets.bottom, 14) }]}>
-                    <TouchableOpacity style={st.sheetDoneBtn}
-                      onPress={() => { onDone([...sel]); setVis(false); }}>
-                      <Ionicons name="checkmark" size={15} color="#FFF" />
-                      <Text style={st.sheetDoneTxt}>
-                        Done{sel.size > 0 ? ` (${sel.size} selected)` : ' — All products'}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
+
+                  <View style={{ height: Math.max(insets.bottom, 16) }} />
                 </View>
               </TouchableWithoutFeedback>
             </View>
@@ -186,30 +297,95 @@ export default function AddEditStaffScreen({ navigation, route }) {
   const [email,       setEmail]       = useState(editStaff?.email       || '');
   const [designation, setDesignation] = useState(editStaff?.designation || '');
 
-  // App Access — collapsed by default, nothing pre-selected
-  const [accessOpen, setAccessOpen] = useState(false);
+  // Role access — a preset (from STAFF_ROLES) or a custom name.
+  // `selectedCustom` wins when set, matching the wholesaler's behaviour.
+  const existingRoleAccess = editStaff?.role_access || editStaff?.designation || '';
+  const presetMatch = STAFF_ROLES.find(
+    r => existingRoleAccess.toLowerCase() === r.key.toLowerCase(),
+  )?.key || '';
+  const [role,           setRole]           = useState(presetMatch || (existingRoleAccess ? '' : 'Sales Executive'));
+  const [selectedCustom, setSelectedCustom] = useState(presetMatch ? '' : existingRoleAccess);
+  const [customRoles,    setCustomRoles]    = useState(
+    (presetMatch || !existingRoleAccess) ? [] : [existingRoleAccess],
+  );
+  const [showRoleModal,  setShowRoleModal]  = useState(false);
+  const [newRoleName,    setNewRoleName]    = useState('');
+
+  // App Access
   const [accessKeys, setAccessKeys] = useState(() => new Set(editStaff?.staff_app_access || []));
 
   // Salary
   const bd = editStaff?.salary_breakdown || {};
-  const [fixedSalary,        setFixedSalary]        = useState(bd.fixed_salary        > 0 ? String(bd.fixed_salary)        : '');
-  const [incentiveValue,     setIncentiveValue]     = useState(bd.incentive_value     > 0 ? String(bd.incentive_value)     : '');
-  const [maxDiscountPct,     setMaxDiscountPct]     = useState(bd.max_discount_percent > 0 ? String(bd.max_discount_percent) : '');
-  const [discountProductIds, setDiscountProductIds] = useState(bd.discount_product_ids || []);
+  const [fixedSalary,    setFixedSalary]    = useState(bd.fixed_salary > 0 ? String(bd.fixed_salary) : '');
 
-  // Products for discount picker
-  const [products, setProducts] = useState([]);
+  // Incentive slabs — "when sales reach sales_amount, pay incentive_pct %".
+  // The highest reached slab applies.
+  const [slabs, setSlabs] = useState(
+    Array.isArray(bd.incentive_slabs) && bd.incentive_slabs.length
+      ? bd.incentive_slabs.map(s => ({
+          sales_amount:  String(s.sales_amount  ?? ''),
+          incentive_pct: String(s.incentive_pct ?? ''),
+        }))
+      : [],
+  );
+
+  // Live current-month sales + earned incentive (edit mode only).
+  const [earned, setEarned] = useState(null);
+
+  // Product discounts — includes mrp + retailPrice for display
+  const [productDiscounts, setProductDiscounts] = useState(
+    (bd.product_discounts || []).map(d => ({
+      id:          d.id || d._id,
+      name:        d.name        || '',
+      code:        d.code        || '',
+      mrp:         d.mrp         || 0,
+      retailPrice: d.retailPrice || d.retail_price || 0,
+      discount:    d.discount != null ? String(d.discount) : '',
+    }))
+  );
+
+  // Products catalogue for picker
+  const [products,        setProducts]        = useState([]);
+  const [productsLoading, setProductsLoading] = useState(false);
 
   // UI
   const [saving,       setSaving]       = useState(false);
   const [initialising, setInitialising] = useState(isEdit);
   const [errors,       setErrors]       = useState({});
 
-  // Load products
+  // Load products — keep mrp + retailPrice for the discount cards
   useEffect(() => {
-    myProductApi.list({ limit: 200 })
-      .then(d => setProducts(d?.products || []))
-      .catch(() => {});
+    setProductsLoading(true);
+    Promise.all([
+      productApi.search({ limit: 200 }),
+      myProductApi.list({ limit: 200 }),
+    ])
+      .then(([catalogData, myData]) => {
+        const catalogList = (catalogData?.products || []).map(p => ({
+          id:          String(p.id || p._id),
+          name:        p.name                            || '',
+          code:        p.productCode || p.code           || '',
+          mrp:         Number(p.prices?.mrp)             || Number(p.mrp)          || 0,
+          retailPrice: Number(p.prices?.retail_price)   || Number(p.retail_price)  || 0,
+        }));
+        const myList = (myData?.products || []).map(p => ({
+          id:          String(p.id || p._id),
+          name:        p.name          || '',
+          code:        p.code          || '',
+          mrp:         Number(p.mrp)   || 0,
+          retailPrice: Number(p.retail_price) || Number(p.retailPrice) || 0,
+        }));
+        // Merge, dedupe by id
+        const seen   = new Set();
+        const merged = [...catalogList, ...myList].filter(p => {
+          if (seen.has(p.id)) return false;
+          seen.add(p.id);
+          return true;
+        });
+        setProducts(merged);
+      })
+      .catch(() => {})
+      .finally(() => setProductsLoading(false));
   }, []);
 
   // Fetch fresh data on edit
@@ -222,52 +398,96 @@ export default function AddEditStaffScreen({ navigation, route }) {
         if (cancelled) return;
         const s = data?.staff || data;
         if (!s) return;
-        setName(s.name || '');
-        setEmail(s.email || '');
+        setName(s.name           || '');
+        setEmail(s.email         || '');
         setDesignation(s.designation || '');
         setAccessKeys(new Set(s.staff_app_access || []));
         const fbd = s.salary_breakdown || {};
-        setFixedSalary(       fbd.fixed_salary        > 0 ? String(fbd.fixed_salary)        : '');
-        setIncentiveValue(    fbd.incentive_value      > 0 ? String(fbd.incentive_value)     : '');
-        setMaxDiscountPct(    fbd.max_discount_percent > 0 ? String(fbd.max_discount_percent) : '');
-        setDiscountProductIds(fbd.discount_product_ids || []);
+        setFixedSalary(        fbd.fixed_salary         > 0 ? String(fbd.fixed_salary)         : '');
+        setSlabs(
+          Array.isArray(fbd.incentive_slabs) && fbd.incentive_slabs.length
+            ? fbd.incentive_slabs.map(x => ({
+                sales_amount:  String(x.sales_amount  ?? ''),
+                incentive_pct: String(x.incentive_pct ?? ''),
+              }))
+            : [],
+        );
+        // Role access — restore preset or custom selection.
+        const ra = s.role_access || s.designation || '';
+        const pm = STAFF_ROLES.find(r => ra.toLowerCase() === r.key.toLowerCase())?.key || '';
+        if (pm) { setRole(pm); setSelectedCustom(''); }
+        else if (ra) { setRole(''); setSelectedCustom(ra); setCustomRoles([ra]); }
+        setProductDiscounts(
+          (fbd.product_discounts || []).map(d => ({
+            id:          d.id || d._id,
+            name:        d.name        || '',
+            code:        d.code        || '',
+            mrp:         d.mrp         || 0,
+            retailPrice: d.retailPrice || d.retail_price || 0,
+            discount:    d.discount != null ? String(d.discount) : '',
+          }))
+        );
       } catch { /* keep params */ }
       finally { if (!cancelled) setInitialising(false); }
     })();
     return () => { cancelled = true; };
   }, [isEdit, editStaff?._id]);
 
-  const toggleModule = useCallback(key => {
-    setAccessKeys(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
-  }, []);
+  // ── "This Month" earned incentive (edit mode only) ────────────────────────
+  useEffect(() => {
+    if (!isEdit || !editStaff?._id) return;
+    let alive = true;
+    staffApi.incentive(editStaff._id)
+      .then(res => { if (alive) setEarned(res?.data ?? res ?? null); })
+      .catch(() => { /* the card simply stays hidden */ });
+    return () => { alive = false; };
+  }, [isEdit, editStaff?._id]);
 
-  const allChecked = RETAILER_MODULES.every(m => accessKeys.has(m.key));
-  const toggleAll  = () => allChecked ? setAccessKeys(new Set()) : setAccessKeys(new Set(ALL_KEYS));
+  // ── Role access helpers ───────────────────────────────────────────────────
+  // Picking a preset also seeds the module checkboxes (owner can still adjust).
+  const pickPreset = (key) => {
+    setRole(key);
+    setSelectedCustom('');
+    setDesignation(key);
+    const mods = ROLE_MODULES[key];
+    if (mods) setAccessKeys(new Set(mods));
+  };
 
-  // Computed salary values
-  const fixedNum   = Number(fixedSalary)    || 0;
-  const incvNum    = Number(incentiveValue) || 0;
-  const maxDiscNum = Number(maxDiscountPct) || 0;
-  const hasDiscount = maxDiscNum > 0;
+  const pickCustom = (name) => {
+    setSelectedCustom(name);
+    setRole('');
+    setDesignation(name);
+  };
 
-  // Incentive is always % of fixed salary
-  const incvAmount   = fixedNum > 0 && incvNum > 0
-    ? parseFloat(((fixedNum * incvNum) / 100).toFixed(2))
-    : 0;
+  const addCustomRole = () => {
+    const n = newRoleName.trim();
+    if (!n) return;
+    if (!customRoles.some(r => r.toLowerCase() === n.toLowerCase())) {
+      setCustomRoles(prev => [...prev, n]);
+    }
+    pickCustom(n);
+    setNewRoleName('');
+    setShowRoleModal(false);
+  };
 
-  const monthlyTotal = fixedNum + incvAmount;
+  const roleAccess = selectedCustom || role || '';
+
+  // ── Incentive slab helpers ────────────────────────────────────────────────
+  const addSlab    = () => setSlabs(s => [...s, { sales_amount: '', incentive_pct: '' }]);
+  const removeSlab = (i) => setSlabs(s => s.filter((_, idx) => idx !== i));
+  const setSlabVal = (i, k, v) =>
+    setSlabs(s => s.map((row, idx) => idx === i ? { ...row, [k]: v.replace(/[^\d.]/g, '') } : row));
+
+  // Computed salary
+  const fixedNum = Number(fixedSalary) || 0;
 
   const validate = () => {
     const e = {};
-    if (!name.trim())                e.name   = 'Staff name is required.';
-    if (!/^\d{10}$/.test(mobile.trim())) e.mobile = 'Enter a valid 10-digit mobile number.';
+    if (!name.trim())                        e.name           = 'Staff name is required.';
+    if (!/^\d{10}$/.test(mobile.trim()))     e.mobile         = 'Enter a valid 10-digit mobile number.';
     if (email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) e.email = 'Enter a valid email.';
-    if (fixedSalary    && isNaN(Number(fixedSalary)))    e.fixedSalary    = 'Enter a valid number.';
-    if (incentiveValue && isNaN(Number(incentiveValue))) e.incentiveValue = 'Enter a valid number.';
-    if (maxDiscountPct) {
-      const n = Number(maxDiscountPct);
-      if (isNaN(n) || n < 0 || n > 100) e.maxDiscountPct = 'Must be 0–100.';
-    }
+    if (!roleAccess)                         e.role           = 'Select or add a role access.';
+    if (fixedSalary && isNaN(Number(fixedSalary)))    e.fixedSalary    = 'Enter a valid number.';
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -278,17 +498,43 @@ export default function AddEditStaffScreen({ navigation, route }) {
     try {
       const checked = [...accessKeys];
       const isAll   = ALL_KEYS.every(k => checked.includes(k));
+
+      // Clean slabs: keep only valid rows, sorted ascending by sales amount.
+      const cleanSlabs = slabs
+        .map(s => ({
+          sales_amount:  Number(s.sales_amount),
+          incentive_pct: Number(s.incentive_pct),
+        }))
+        .filter(s => isFinite(s.sales_amount) && s.sales_amount > 0 && isFinite(s.incentive_pct) && s.incentive_pct >= 0)
+        .sort((a, b) => a.sales_amount - b.sales_amount);
+
+      // Clean product discounts: keep rows with a valid id + 0–100 %.
+      const cleanDiscounts = productDiscounts
+        .map(d => ({
+          id:          d.id,
+          name:        d.name,
+          code:        d.code,
+          mrp:         Number(d.mrp) || 0,
+          retailPrice: Number(d.retailPrice) || 0,
+          discount:    Number(d.discount) || 0,
+        }))
+        .filter(d => d.id && d.discount >= 0 && d.discount <= 100);
+
       const payload = {
-        name: name.trim(), mobile: mobile.trim(),
-        email: email.trim(), designation: designation.trim(),
-        staff_app_access:     isAll ? [] : checked,
-        fixed_salary:         fixedNum,
-        incentive_type:       incvNum > 0 ? 'percentage' : 'none',
-        incentive_value:      incvNum,
-        sales_percentage:     0,
-        discount_access:      hasDiscount,
-        max_discount_percent: maxDiscNum,
-        discount_product_ids: discountProductIds,
+        name:              name.trim(),
+        mobile:            mobile.trim(),
+        email:             email.trim(),
+        designation:       designation.trim() || roleAccess,
+        role_access:       roleAccess,
+        staff_app_access:  isAll ? [] : checked,
+        fixed_salary:      fixedNum,
+        incentive_slabs:   cleanSlabs,
+        sales_percentage:  0,
+        discount_access:   cleanDiscounts.length > 0,
+        max_discount_percent: cleanDiscounts.length
+          ? Math.max(...cleanDiscounts.map(d => d.discount))
+          : 0,
+        product_discounts: cleanDiscounts,
       };
       if (isEdit) await staffApi.update(editStaff._id, payload);
       else        await staffApi.create(payload);
@@ -308,8 +554,10 @@ export default function AddEditStaffScreen({ navigation, route }) {
           <Ionicons name="arrow-back" size={22} color="#FFF" />
         </TouchableOpacity>
         <Text style={st.headerTitle}>{isEdit ? 'Edit Staff' : 'Add Staff'}</Text>
-        <TouchableOpacity style={[st.saveBtn, (saving || initialising) && { opacity: 0.6 }]}
-          onPress={handleSave} disabled={saving || initialising}>
+        <TouchableOpacity
+          style={[st.saveBtn, (saving || initialising) && { opacity: 0.6 }]}
+          onPress={handleSave}
+          disabled={saving || initialising}>
           {saving
             ? <ActivityIndicator size="small" color="#FFF" />
             : <><Ionicons name="checkmark" size={16} color="#FFF" /><Text style={st.saveBtnTxt}>Save</Text></>}
@@ -325,14 +573,12 @@ export default function AddEditStaffScreen({ navigation, route }) {
         <KeyboardAvoidingView
           style={{ flex: 1 }}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={Platform.OS === 'android' ? 0 : 0}
-        >
+          keyboardVerticalOffset={0}>
           <ScrollView
             contentContainerStyle={st.scroll}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="interactive"
-          >
+            keyboardDismissMode="interactive">
 
             {/* ── 1. STAFF DETAILS ── */}
             <SH icon="person-outline" title="Staff Details" color={Colors.secondary} />
@@ -360,167 +606,181 @@ export default function AddEditStaffScreen({ navigation, route }) {
               </Field>
             </View>
 
-            {/* ── 2. APP ACCESS (collapsible, starts closed) ── */}
-            <View style={st.accessHeader}>
-              <View style={st.accessLeft}>
-                <View style={{ width: 3, height: 17, backgroundColor: '#2980B9', borderRadius: 2 }} />
-                <Ionicons name="shield-checkmark-outline" size={14} color="#2980B9" />
-                <Text style={[st.shTitle, { color: '#2980B9' }]}>App Access</Text>
-                {accessKeys.size > 0 && (
-                  <View style={st.accessBadge}>
-                    <Text style={st.accessBadgeTxt}>{allChecked ? 'Full' : `${accessKeys.size}/${RETAILER_MODULES.length}`}</Text>
-                  </View>
-                )}
-              </View>
+            {/* ── 1b. ROLE ACCESS ── */}
+            <SH icon="shield-key-outline" title="Role Access" color={Colors.primary} />
+            <View style={st.card}>
+              {STAFF_ROLES.map(r => {
+                const active = !selectedCustom && role === r.key;
+                return (
+                  <TouchableOpacity
+                    key={r.key}
+                    style={st.roleRow}
+                    onPress={() => pickPreset(r.key)}
+                    activeOpacity={0.85}>
+                    <View style={[st.radio, active && st.radioActive]}>
+                      {active && <Ionicons name="checkmark" size={13} color="#FFF" />}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[st.roleLabel, active && { color: Colors.primary }]}>{r.label}</Text>
+                      <Text style={st.roleDesc}>{r.desc}</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+
+              {/* Custom role names added by the owner */}
+              {customRoles.map(cname => {
+                const active = selectedCustom === cname;
+                return (
+                  <TouchableOpacity
+                    key={cname}
+                    style={st.roleRow}
+                    onPress={() => pickCustom(cname)}
+                    activeOpacity={0.85}>
+                    <View style={[st.radio, active && st.radioActive]}>
+                      {active && <Ionicons name="checkmark" size={13} color="#FFF" />}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[st.roleLabel, active && { color: Colors.primary }]}>{cname}</Text>
+                      <Text style={st.roleDesc}>Custom access</Text>
+                    </View>
+                    <View style={st.customTag}>
+                      <Text style={st.customTagTxt}>Custom</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+
+              {!!errors.role && <Text style={st.err}>{errors.role}</Text>}
+
               <TouchableOpacity
-                style={[st.accessBtn, accessOpen && st.accessBtnOpen]}
-                onPress={() => setAccessOpen(v => !v)} activeOpacity={0.8}>
-                <Ionicons
-                  name={accessOpen ? 'checkmark-done-outline' : accessKeys.size > 0 ? 'create-outline' : 'add'}
-                  size={13} color="#FFF" />
-                <Text style={st.accessBtnTxt}>{accessOpen ? 'Done' : accessKeys.size > 0 ? 'Edit' : 'Add'}</Text>
+                style={st.addRoleBtn}
+                onPress={() => { setNewRoleName(''); setShowRoleModal(true); }}
+                activeOpacity={0.8}>
+                <Ionicons name="add-circle-outline" size={18} color={Colors.primary} />
+                <Text style={st.addRoleTxt}>Add Role Access</Text>
               </TouchableOpacity>
+
+              <Text style={[st.hint, { marginTop: 10 }]}>
+                The role you pick decides what this staff member can access in the app.
+                Add a custom role if none of the presets fit.
+              </Text>
             </View>
 
-            {accessOpen && (
-              <View style={[st.card, { marginTop: 6 }]}>
-                <View style={st.saRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={st.saTitle}>Retailer App Access</Text>
-                    <Text style={st.saSub}>
-                      {allChecked ? 'Full access' : accessKeys.size === 0 ? 'No sections selected' : `${accessKeys.size} of ${RETAILER_MODULES.length} selected`}
-                    </Text>
-                  </View>
-                  <TouchableOpacity style={st.saBtn} onPress={toggleAll}>
-                    <Text style={st.saBtnTxt}>{allChecked ? 'Deselect All' : 'Select All'}</Text>
-                  </TouchableOpacity>
-                </View>
-                <View style={{ gap: 6 }}>
-                  {RETAILER_MODULES.map(m => (
-                    <ModRow key={m.key} mod={m} checked={accessKeys.has(m.key)} onToggle={() => toggleModule(m.key)} />
-                  ))}
-                </View>
-                {accessKeys.size === 0 && (
-                  <View style={st.warnRow}>
-                    <Ionicons name="warning-outline" size={13} color={Colors.warning} />
-                    <Text style={st.warnTxt}>No sections — staff sees Dashboard only.</Text>
-                  </View>
-                )}
-                <TouchableOpacity style={st.doneBtn} onPress={() => setAccessOpen(false)}>
-                  <Ionicons name="checkmark" size={14} color="#FFF" />
-                  <Text style={st.doneTxt}>Done</Text>
-                </TouchableOpacity>
-              </View>
-            )}
+            {/* App access is derived from the chosen Role Access above — the
+                wholesaler works the same way. `accessKeys` is still sent with
+                the payload; it is simply no longer edited by hand here. */}
 
-            {/* ── 3. SALARY BREAKDOWN (single card) ── */}
-            <SH icon="cash-outline" title="Salary Breakdown" color="#27AE60" />
+            {/* ── 3. SALARY DETAILS ── (same separate-card layout as the wholesaler) */}
+            <SH icon="cash-outline" title="Salary Details" color="#27AE60" />
             <View style={st.card}>
-
-              {/* Fixed Salary */}
-              <Field label="Fixed Monthly Salary (₹)" error={errors.fixedSalary}
+              <Field label="Monthly Salary (₹)" error={errors.fixedSalary}
                 hint="Guaranteed base pay every month">
                 <Inp value={fixedSalary}
                   onChangeText={t => { setFixedSalary(t.replace(/[^0-9.]/g, '')); setErrors(e => ({ ...e, fixedSalary: '' })); }}
                   placeholder="e.g. 15000" keyboardType="decimal-pad" />
               </Field>
+            </View>
 
-              <View style={st.divider} />
+            {/* ── 4. INCENTIVE DETAILS ── own card, like the wholesaler */}
+            <SH icon="trending-up-outline" title="Incentive Details" color="#8E44AD" />
+            <View style={st.card}>
+              <Text style={st.hint}>
+                Add slabs: when the staff&apos;s sales reach an amount, they earn that %.
+                The highest reached slab applies.
+              </Text>
 
-              {/* Incentive */}
-              <Text style={st.fLabel}>Incentive / Bonus</Text>
-              <Text style={st.hint}>Enter % of fixed salary — amount auto-calculates beside it</Text>
-              <View style={st.incvRow}>
-                {/* % input */}
-                <View style={{ flex: 1, gap: 5 }}>
-                  <Text style={st.fLabel}>Percentage (%)</Text>
+              {/* Incentive slabs (sales amount → %) */}
+              {slabs.length > 0 && (
+                <View style={st.slabHead}>
+                  <Text style={[st.slabHeadTxt, { flex: 1.4 }]}>Sales ≥ (₹)</Text>
+                  <Text style={[st.slabHeadTxt, { flex: 1 }]}>Incentive %</Text>
+                  <View style={{ width: 30 }} />
+                </View>
+              )}
+
+              {slabs.map((s, i) => (
+                <View key={i} style={st.slabRow}>
                   <TextInput
-                    style={st.input}
-                    value={incentiveValue}
-                    onChangeText={t => { setIncentiveValue(t.replace(/[^0-9.]/g, '')); setErrors(e => ({ ...e, incentiveValue: '' })); }}
-                    placeholder="e.g. 10"
-                    placeholderTextColor={Colors.textTertiary}
+                    style={[st.slabInput, { flex: 1.4 }]}
+                    value={s.sales_amount}
+                    onChangeText={v => setSlabVal(i, 'sales_amount', v)}
                     keyboardType="decimal-pad"
+                    placeholder="50000"
+                    placeholderTextColor={Colors.textTertiary}
                   />
-                  {!!errors.incentiveValue && <Text style={st.err}>{errors.incentiveValue}</Text>}
+                  <TextInput
+                    style={[st.slabInput, { flex: 1 }]}
+                    value={s.incentive_pct}
+                    onChangeText={v => setSlabVal(i, 'incentive_pct', v)}
+                    keyboardType="decimal-pad"
+                    placeholder="1"
+                    placeholderTextColor={Colors.textTertiary}
+                  />
+                  <TouchableOpacity
+                    style={st.slabDel}
+                    onPress={() => removeSlab(i)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Ionicons name="close-circle" size={20} color={Colors.border} />
+                  </TouchableOpacity>
                 </View>
+              ))}
 
-                {/* Arrow */}
-                <View style={st.incvArrow}>
-                  <Ionicons name="arrow-forward" size={16} color={Colors.textTertiary} />
-                </View>
+              <TouchableOpacity style={st.addSlabBtn} onPress={addSlab} activeOpacity={0.8}>
+                <Ionicons name="add" size={15} color={Colors.primary} />
+                <Text style={st.addSlabTxt}>Add Incentive Slab</Text>
+              </TouchableOpacity>
 
-                {/* Auto-calc ₹ amount */}
-                <View style={[{ flex: 1, gap: 4 }, st.incvResult]}>
-                  <Text style={st.fLabel}>Amount (₹)</Text>
-                  <Text style={st.incvResVal}>{incvAmount > 0 ? fmt(incvAmount) : '—'}</Text>
-                  <Text style={st.incvResHint}>
-                    {fixedNum > 0 && incvNum > 0
-                      ? `${incvNum}% of ${fmt(fixedNum)}`
-                      : fixedNum === 0 ? 'Enter fixed salary first' : ''}
+              {slabs.length > 0 && (
+                <View style={st.slabExample}>
+                  <Text style={st.slabExampleTxt}>
+                    Example: Sales ₹50,000 → 1% · ₹1,00,000 → 2% · ₹2,00,000 → 3%
                   </Text>
                 </View>
-              </View>
-
-              <View style={st.divider} />
-
-              {/* Discount Authority */}
-              <Field label="Discount Authority (%)" error={errors.maxDiscountPct}
-                hint="Max % staff can give as discount. Leave blank = no discount.">
-                <Inp value={maxDiscountPct}
-                  onChangeText={t => { setMaxDiscountPct(t.replace(/[^0-9.]/g, '')); setErrors(e => ({ ...e, maxDiscountPct: '' })); }}
-                  placeholder="e.g. 10" keyboardType="decimal-pad" />
-              </Field>
-
-              {/* Product dropdown — only shown when discount % is set */}
-              {hasDiscount && (
-                <ProductPicker
-                  products={products}
-                  selectedIds={discountProductIds}
-                  onDone={setDiscountProductIds}
-                />
               )}
             </View>
 
-            {/* ── 4. SALARY SUMMARY ── */}
-            {(fixedNum > 0 || incvAmount > 0 || hasDiscount) && (
+            {/* ── 5. DISCOUNT AUTHORIZED ACCESS ── own card, like the wholesaler */}
+            <SH icon="pricetags-outline" title="Discount Authorized Access" color={Colors.primary} />
+            <View style={st.card}>
+              <ProductDiscountList
+                products={products}
+                productsLoading={productsLoading}
+                productDiscounts={productDiscounts}
+                onChange={setProductDiscounts}
+              />
+            </View>
+
+            {/* ── 3e. THIS MONTH EARNED (edit mode) ── */}
+            {earned && (
               <>
-                <SH icon="receipt-outline" title="Salary Summary" color={Colors.secondary} />
-                <View style={[st.card, { gap: 0, padding: 0, overflow: 'hidden' }]}>
-                  {fixedNum > 0 && (
-                    <View style={st.sumRow}>
-                      <View style={[st.sumIcon, { backgroundColor: '#27AE6018' }]}>
-                        <Ionicons name="wallet-outline" size={13} color="#27AE60" />
-                      </View>
-                      <Text style={st.sumLabel}>Fixed Salary</Text>
-                      <Text style={[st.sumVal, { color: '#27AE60' }]}>{fmt(fixedNum)}/mo</Text>
-                    </View>
-                  )}
-                  {incvAmount > 0 && (
-                    <View style={st.sumRow}>
-                      <View style={[st.sumIcon, { backgroundColor: '#8E44AD18' }]}>
-                        <Ionicons name="percent-outline" size={13} color="#8E44AD" />
-                      </View>
-                      <Text style={st.sumLabel}>Incentive ({incvNum}%)</Text>
-                      <Text style={[st.sumVal, { color: '#8E44AD' }]}>{fmt(incvAmount)}/mo</Text>
-                    </View>
-                  )}
-                  {monthlyTotal > 0 && (
-                    <View style={st.sumTotal}>
-                      <Text style={st.sumTotalLbl}>Monthly Guaranteed</Text>
-                      <Text style={st.sumTotalVal}>{fmt(monthlyTotal)}</Text>
-                    </View>
-                  )}
-                  {hasDiscount && (
-                    <View style={[st.sumRow, { borderBottomWidth: 0 }]}>
-                      <View style={[st.sumIcon, { backgroundColor: Colors.primary + '18' }]}>
-                        <Ionicons name="cut-outline" size={13} color={Colors.primary} />
-                      </View>
-                      <Text style={st.sumLabel}>Discount Authority</Text>
-                      <Text style={[st.sumVal, { color: Colors.primary }]}>≤ {maxDiscNum}%</Text>
-                    </View>
-                  )}
+                <SH
+                  icon="wallet-outline"
+                  title={`This Month${earned.periodLabel ? ` · ${earned.periodLabel}` : ''}`}
+                  color={Colors.secondary}
+                />
+                <View style={st.earnedCard}>
+                  <View style={st.earnedItem}>
+                    <Text style={st.earnedLabel}>Sales</Text>
+                    <Text style={st.earnedValue}>{fmt(earned.monthSales)}</Text>
+                  </View>
+                  <View style={st.earnedDivider} />
+                  <View style={st.earnedItem}>
+                    <Text style={st.earnedLabel}>Rate</Text>
+                    <Text style={st.earnedValue}>{earned.pct || 0}%</Text>
+                  </View>
+                  <View style={st.earnedDivider} />
+                  <View style={st.earnedItem}>
+                    <Text style={st.earnedLabel}>Incentive</Text>
+                    <Text style={[st.earnedValue, { color: Colors.primary }]}>{fmt(earned.amount)}</Text>
+                  </View>
                 </View>
+                {!!earned.basisNote && (
+                  <Text style={[st.hint, { marginTop: -8, marginBottom: 12 }]}>
+                    {earned.basisNote}
+                    {earned.orderCount != null ? ` ${earned.orderCount} order${earned.orderCount === 1 ? '' : 's'} this month.` : ''}
+                  </Text>
+                )}
               </>
             )}
 
@@ -528,98 +788,132 @@ export default function AddEditStaffScreen({ navigation, route }) {
           </ScrollView>
         </KeyboardAvoidingView>
       )}
+
+      {/* ── Add Role Access modal ── */}
+      <Modal
+        visible={showRoleModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowRoleModal(false)}>
+        <TouchableWithoutFeedback onPress={() => setShowRoleModal(false)}>
+          <View style={st.modalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={st.modalCard}>
+                <Text style={st.modalTitle}>Add Role Access</Text>
+                <Text style={st.modalSub}>Create a custom access name for this staff member.</Text>
+                <TextInput
+                  style={st.input}
+                  value={newRoleName}
+                  onChangeText={setNewRoleName}
+                  placeholder="e.g. Cashier, Floor Manager"
+                  placeholderTextColor={Colors.textTertiary}
+                  autoFocus
+                />
+                <View style={st.modalBtnRow}>
+                  <TouchableOpacity style={st.modalGhost} onPress={() => setShowRoleModal(false)}>
+                    <Text style={st.modalGhostTxt}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={st.modalPrimary} onPress={addCustomRole}>
+                    <Text style={st.modalPrimaryTxt}>Add</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
     </SafeAreaView>
   );
 }
 
+// ─────────────────────────────────────────────────────────────
 const st = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#F2F4F7' },
-  scroll: { padding: 16, paddingBottom: 120 },
-  header: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.secondary, paddingHorizontal: 16, paddingVertical: 12 },
-  backBtn: { marginRight: 10 },
+  safe:        { flex: 1, backgroundColor: '#F2F4F7' },
+  scroll:      { padding: 16, paddingBottom: 120 },
+  header:      { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.secondary, paddingHorizontal: 16, paddingVertical: 12 },
+  backBtn:     { marginRight: 10 },
   headerTitle: { flex: 1, fontSize: 18, fontWeight: '800', color: '#FFF' },
-  saveBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: Colors.primary, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7 },
-  saveBtnTxt: { fontSize: 13, fontWeight: '700', color: '#FFF' },
-  loader: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
-  loaderTxt: { fontSize: 14, color: Colors.textSecondary },
+  saveBtn:     { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: Colors.primary, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7 },
+  saveBtnTxt:  { fontSize: 13, fontWeight: '700', color: '#FFF' },
+  loader:      { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
+  loaderTxt:   { fontSize: 14, color: Colors.textSecondary },
 
-  sh: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 20, marginBottom: 8 },
-  shBar: { width: 3, height: 17, borderRadius: 2 },
+  sh:      { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 20, marginBottom: 8 },
+  shBar:   { width: 3, height: 17, borderRadius: 2 },
   shTitle: { fontSize: 13, fontWeight: '800', letterSpacing: 0.3 },
 
-  card: { backgroundColor: '#FFF', borderRadius: 14, padding: 16, ...Shadows.sm, gap: 14 },
-  divider: { height: 1, backgroundColor: Colors.borderLight },
+  card:    { backgroundColor: '#FFF', borderRadius: 14, padding: 16, ...Shadows.sm, gap: 14 },
 
-  field: { gap: 5 },
-  fLabel: { fontSize: 11, fontWeight: '700', color: Colors.textSecondary, letterSpacing: 0.3, textTransform: 'uppercase' },
-  input: { backgroundColor: '#F7F8FA', borderRadius: 10, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 12, paddingVertical: 11, fontSize: 14, color: Colors.textPrimary },
+  field:    { gap: 5 },
+  fLabel:   { fontSize: 11, fontWeight: '700', color: Colors.textSecondary, letterSpacing: 0.3, textTransform: 'uppercase' },
+  input:    { backgroundColor: '#F7F8FA', borderRadius: 10, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 12, paddingVertical: 11, fontSize: 14, color: Colors.textPrimary },
   inputDis: { backgroundColor: Colors.borderLight, color: Colors.textTertiary },
-  textarea: { height: 72, paddingTop: 10 },
-  err: { fontSize: 11, color: Colors.error },
-  hint: { fontSize: 11, color: Colors.textTertiary, lineHeight: 16 },
+  err:      { fontSize: 11, color: Colors.error },
+  hint:     { fontSize: 11, color: Colors.textTertiary, lineHeight: 16 },
 
-  // App Access
-  accessHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 20, marginBottom: 0 },
-  accessLeft: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 },
-  accessBadge: { backgroundColor: Colors.primaryBg, borderRadius: 7, paddingHorizontal: 6, paddingVertical: 2 },
-  accessBadgeTxt: { fontSize: 10, fontWeight: '700', color: Colors.primary },
-  accessBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: Colors.primary, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 6 },
-  accessBtnOpen: { backgroundColor: Colors.success },
-  accessBtnTxt: { fontSize: 12, fontWeight: '700', color: '#FFF' },
+  // App Access styles removed — access now comes from the selected Role Access.
 
-  saRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
-  saTitle: { fontSize: 13, fontWeight: '700', color: Colors.textPrimary },
-  saSub: { fontSize: 11, color: Colors.textSecondary, marginTop: 2 },
-  saBtn: { backgroundColor: Colors.secondaryBg, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
-  saBtnTxt: { fontSize: 11, fontWeight: '700', color: Colors.secondary },
+  // ── Discount Authorized Access (flat Item / Max % table) ──
+  authRow:  { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
+  authName: { fontSize: 13.5, fontWeight: '700', color: Colors.textPrimary },
+  authCode: { fontSize: 11, color: Colors.textTertiary, marginTop: 1 },
 
-  modRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10, borderRadius: 10, borderWidth: 1.5, borderColor: Colors.border, backgroundColor: '#F7F8FA' },
-  modRowOn: { borderColor: Colors.secondary, backgroundColor: Colors.secondaryBg },
-  modIcon: { width: 32, height: 32, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  modMeta: { flex: 1 },
-  modName: { fontSize: 12, fontWeight: '600', color: Colors.textSecondary },
-  modDesc: { fontSize: 10, color: Colors.textTertiary, marginTop: 1 },
-  cb: { width: 20, height: 20, borderRadius: 5, borderWidth: 2, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF' },
-  cbOn: { backgroundColor: Colors.secondary, borderColor: Colors.secondary },
+  // ── Bottom sheet ──
+  sheetOverlay:   { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.45)' },
+  sheet:          { backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingTop: 8, maxHeight: '85%' },
+  sheetHandle:    { width: 36, height: 4, backgroundColor: Colors.border, borderRadius: 2, alignSelf: 'center', marginBottom: 12 },
+  sheetHead:      { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
+  sheetTitle:     { fontSize: 15, fontWeight: '800', color: Colors.textPrimary },
+  sheetSubtitle:  { fontSize: 11, color: Colors.textTertiary, marginTop: 2 },
+  sheetClose:     { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', marginLeft: 'auto' },
+  sheetSearch:    { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginVertical: 10, backgroundColor: Colors.background, borderRadius: 10, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 12, height: 40 },
+  sheetSI:        { flex: 1, fontSize: 13, color: Colors.textPrimary, paddingVertical: 0 },
 
-  warnRow: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: Colors.warningBg, borderRadius: 8, padding: 10 },
-  warnTxt: { flex: 1, fontSize: 11, color: Colors.warningText },
-  doneBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: Colors.success, borderRadius: 10, paddingVertical: 10 },
-  doneTxt: { fontSize: 13, fontWeight: '700', color: '#FFF' },
+  sheetProdRow:  { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
+  sheetProdIcon: { width: 34, height: 34, borderRadius: 9, backgroundColor: Colors.primaryBg, alignItems: 'center', justifyContent: 'center' },
+  sheetProdMrp:  { fontSize: 11, fontWeight: '700', color: '#E67E22', backgroundColor: '#FEF9E7', borderRadius: 6, paddingHorizontal: 5, paddingVertical: 2 },
+  sheetProdAdd:  { width: 28, height: 28, borderRadius: 8, backgroundColor: Colors.primaryBg, alignItems: 'center', justifyContent: 'center' },
 
-  // Incentive
-  incvRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  incvArrow: { paddingTop: 26, alignItems: 'center' },
-  incvResult: { backgroundColor: Colors.secondaryBg, borderRadius: 10, padding: 12 },
-  incvResVal: { fontSize: 18, fontWeight: '900', color: Colors.secondary },
-  incvResHint: { fontSize: 10, color: Colors.textTertiary },
-
-  // Product picker
-  prodTrig: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#F7F8FA', borderRadius: 10, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 12, paddingVertical: 11 },
-  prodTrigTxt: { flex: 1, fontSize: 13, color: Colors.textPrimary },
-
-  sheetOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.45)' },
-  sheet: { backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingTop: 8, maxHeight: '80%' },
-  sheetHandle: { width: 36, height: 4, backgroundColor: Colors.border, borderRadius: 2, alignSelf: 'center', marginBottom: 12 },
-  sheetHead: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
-  sheetTitle: { flex: 1, fontSize: 15, fontWeight: '800', color: Colors.textPrimary },
-  sheetClose: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
-  sheetSearch: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginVertical: 10, backgroundColor: Colors.background, borderRadius: 10, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 12, height: 40 },
-  sheetSI: { flex: 1, fontSize: 13, color: Colors.textPrimary, paddingVertical: 0 },
-  prodRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
-  prodRowOn: { backgroundColor: Colors.secondaryBg },
   prodName: { fontSize: 13, fontWeight: '600', color: Colors.textPrimary },
-  prodCode: { fontSize: 11, color: Colors.textTertiary, marginTop: 1 },
-  sheetDoneRow: { paddingHorizontal: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: Colors.borderLight },
-  sheetDoneBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: Colors.primary, borderRadius: 12, paddingVertical: 13 },
-  sheetDoneTxt: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  prodCode: { fontSize: 11, color: Colors.textTertiary },
 
-  // Summary
-  sumRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F0F2F5' },
-  sumIcon: { width: 28, height: 28, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
-  sumLabel: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.textPrimary },
-  sumVal: { fontSize: 13, fontWeight: '800' },
-  sumTotal: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: Colors.secondaryBg, borderTopWidth: 1, borderBottomWidth: 1, borderColor: Colors.secondary + '30' },
-  sumTotalLbl: { fontSize: 13, fontWeight: '700', color: Colors.secondary },
-  sumTotalVal: { fontSize: 17, fontWeight: '900', color: Colors.secondary },
+  // ── Role Access ──
+  roleRow:      { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
+  radio:        { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center' },
+  radioActive:  { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  roleLabel:    { fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
+  roleDesc:     { fontSize: 11.5, color: Colors.textTertiary, marginTop: 1 },
+  customTag:    { backgroundColor: Colors.primaryBg, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
+  customTagTxt: { fontSize: 9.5, fontWeight: '800', color: Colors.primary },
+  addRoleBtn:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, marginTop: 12, paddingVertical: 11, borderRadius: 10, borderWidth: 1.5, borderColor: Colors.primary, borderStyle: 'dashed', backgroundColor: Colors.primaryBg },
+  addRoleTxt:   { fontSize: 13, fontWeight: '800', color: Colors.primary },
+
+  // ── Incentive slabs ──
+  slabHead:      { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  slabHeadTxt:   { fontSize: 11, fontWeight: '800', color: Colors.textTertiary },
+  slabRow:       { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  slabInput:     { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 10, height: 44, paddingHorizontal: 12, fontSize: 14, fontWeight: '600', color: Colors.textPrimary, backgroundColor: '#FFF' },
+  slabDel:       { width: 30, alignItems: 'center' },
+  addSlabBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 4, paddingVertical: 11, borderRadius: 10, borderWidth: 1.5, borderColor: Colors.primary, borderStyle: 'dashed', backgroundColor: Colors.primaryBg },
+  addSlabTxt:    { fontSize: 13, fontWeight: '800', color: Colors.primary },
+  slabExample:   { marginTop: 12, padding: 10, borderRadius: 10, backgroundColor: Colors.secondaryBg },
+  slabExampleTxt:{ fontSize: 11, color: Colors.textSecondary, lineHeight: 16 },
+
+  // ── This Month earned ──
+  earnedCard:    { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.secondary, borderRadius: 14, paddingVertical: 16, marginBottom: 14 },
+  earnedItem:    { flex: 1, alignItems: 'center' },
+  earnedLabel:   { fontSize: 11, color: 'rgba(255,255,255,0.6)', marginBottom: 4 },
+  earnedValue:   { fontSize: 15, fontWeight: '900', color: '#FFF' },
+  earnedDivider: { width: 1, height: 30, backgroundColor: 'rgba(255,255,255,0.15)' },
+
+  // ── Modal ──
+  modalOverlay:   { flex: 1, backgroundColor: 'rgba(15,22,38,0.55)', justifyContent: 'center', padding: 24 },
+  modalCard:      { backgroundColor: '#FFF', borderRadius: 18, padding: 20 },
+  modalTitle:     { fontSize: 17, fontWeight: '900', color: Colors.textPrimary },
+  modalSub:       { fontSize: 12.5, color: Colors.textSecondary, marginTop: 3, marginBottom: 14 },
+  modalBtnRow:    { flexDirection: 'row', gap: 10, marginTop: 18 },
+  modalGhost:     { flex: 1, height: 46, borderRadius: 12, borderWidth: 1.5, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.background },
+  modalGhostTxt:  { fontSize: 14, fontWeight: '800', color: Colors.textSecondary },
+  modalPrimary:   { flex: 1, height: 46, borderRadius: 12, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
+  modalPrimaryTxt: { fontSize: 14, fontWeight: '800', color: '#FFF' },
 });

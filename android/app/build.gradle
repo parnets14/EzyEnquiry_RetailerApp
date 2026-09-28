@@ -1,6 +1,7 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+apply plugin: "com.google.gms.google-services"
 
 // react-native-vector-icons font assets
 project.ext.vectoricons = [
@@ -127,4 +128,9 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+
+    // Firebase BOM — manages all Firebase library versions consistently
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-messaging")
+    implementation("com.google.firebase:firebase-analytics")
 }
