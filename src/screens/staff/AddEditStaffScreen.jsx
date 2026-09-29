@@ -20,6 +20,17 @@ const RETAILER_MODULES = [
   { key: 'customers',     label: 'Customers',    description: 'Manage customers',         icon: 'people-outline',        color: '#16A085' },
   { key: 'notifications', label: 'Notifications',description: 'In-app notifications',     icon: 'notifications-outline', color: '#E74C3C' },
   { key: 'reports',       label: 'Reports',      description: 'Sales & order reports',    icon: 'bar-chart-outline',     color: '#1A2340' },
+  // ── ERP modules (added 2026-09-29) ──
+  { key: 'sales',         label: 'Sales',        description: 'Record sales',             icon: 'trending-up-outline',   color: '#27AE60' },
+  { key: 'purchases',     label: 'Purchase',     description: 'Purchase & suppliers',     icon: 'cart-outline',          color: '#DC2626' },
+  { key: 'inventory',     label: 'Inventory',    description: 'Stock & warehouses',       icon: 'file-tray-stacked-outline', color: '#0891B2' },
+  { key: 'expenses',      label: 'Expense',      description: 'Record expenses',          icon: 'wallet-outline',        color: '#E67E22' },
+  { key: 'payments',      label: 'Payments',     description: 'Receivables & payables',   icon: 'cash-outline',          color: '#EA580C' },
+  { key: 'accounts',      label: 'Accounts',     description: 'Ledgers & cash book',      icon: 'book-outline',          color: '#6D28D9' },
+  { key: 'profit_loss',   label: 'Profit & Loss',description: 'Profit and loss',          icon: 'stats-chart-outline',   color: '#059669' },
+  { key: 'leads',         label: 'Leads',        description: 'Track sales leads',        icon: 'funnel-outline',        color: '#DB2777' },
+  { key: 'dispatches',    label: 'Dispatch',     description: 'Shipments & POD',          icon: 'car-outline',           color: '#7C3AED' },
+  { key: 'documents',     label: 'Documents',    description: 'Document repository',      icon: 'folder-outline',        color: '#0891B2' },
 ];
 const ALL_KEYS = RETAILER_MODULES.map(m => m.key);
 

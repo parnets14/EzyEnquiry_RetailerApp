@@ -26,6 +26,17 @@ export const RETAILER_MODULES = [
   'customers',
   'notifications',
   'reports',
+  // ── ERP modules (added 2026-09-29, served by /api/retailer/erp/*) ──
+  'sales',
+  'purchases',
+  'inventory',
+  'expenses',
+  'payments',
+  'accounts',
+  'profit_loss',
+  'leads',
+  'dispatches',
+  'documents',
 ];
 
 /** Normalise the access list off a user object coming from any login path. */

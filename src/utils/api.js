@@ -5,6 +5,58 @@ import { STORAGE_KEYS } from '../constants';
 const DEFAULT_TIMEOUT = 20000; // 20 s
 const RETAILER_BASE   = `${API_BASE_URL}/retailer`;
 
+// ─── Global 401 handling ──────────────────────────────────────────────────────
+// A JWT that expires (or is rejected for any other reason) makes EVERY
+// authenticated request fail with 401 "Invalid or expired token". Without a
+// central handler the stale token stays in AsyncStorage, the cached user keeps
+// the app on the authenticated stack, and every screen just shows the raw error
+// forever — the user is stuck and has to reinstall/clear data to recover.
+//
+// So: when any request 401s, clear the stored session exactly once and tell the
+// app to drop back to Login. AuthContext subscribes via setUnauthorizedHandler.
+let onUnauthorized = null;
+// Guards against a fan-out of parallel 401s each triggering a logout/navigation.
+let handlingUnauthorized = false;
+
+export function setUnauthorizedHandler(fn) {
+  onUnauthorized = typeof fn === 'function' ? fn : null;
+}
+
+async function notifyUnauthorized() {
+  if (handlingUnauthorized) return;
+  handlingUnauthorized = true;
+  try {
+    await session.clear();
+  } catch { /* best-effort */ }
+  try {
+    if (onUnauthorized) onUnauthorized();
+  } catch { /* best-effort */ }
+  // Release on the next tick so a burst of sibling 401s is deduped but a later,
+  // genuine expiry (after re-login) is still caught.
+  setTimeout(() => { handlingUnauthorized = false; }, 0);
+}
+
+// 401 bodies that mean "the session is gone" — as opposed to a 401 that is a
+// legitimate business response (e.g. a wrong OTP/password on the login screen,
+// which must NOT wipe the session or bounce the user around mid-auth-flow).
+const SESSION_DEAD_MESSAGES = [
+  'invalid or expired token',
+  'no token provided',
+  'user not found',
+  'staff member not found',
+  'account deactivated',
+  'token has expired',
+];
+
+function isSessionDead(json, url) {
+  // Never treat an auth-endpoint 401 as a dead session — those are ordinary
+  // login/OTP failures and the screens handle them inline.
+  if (/\/auth\/(login|register|verify|otp|forgot|reset)/i.test(url)) return false;
+  const msg = String(json?.message || '').toLowerCase();
+  if (!msg) return true; // bare 401 with no message → still assume the session is gone
+  return SESSION_DEAD_MESSAGES.some(m => msg.includes(m));
+}
+
 // ─── Low-level fetch helper ───────────────────────────────────────────────────
 async function request(url, { method = 'GET', body, auth = false, timeout = DEFAULT_TIMEOUT } = {}) {
   const headers = { 'Content-Type': 'application/json' };
@@ -40,6 +92,10 @@ async function request(url, { method = 'GET', body, auth = false, timeout = DEFA
     const error = new Error(message);
     error.status = res.status;
     error.data = json;
+    // Expired/invalid session → clear it once and fall back to Login.
+    if (res.status === 401 && auth && isSessionDead(json, url)) {
+      notifyUnauthorized();
+    }
     throw error;
   }
 
@@ -72,6 +128,10 @@ async function uploadMultipart(url, form, timeoutMs = 30000, method = 'POST') {
     const message = json?.message || `Upload failed (${res.status}).`;
     const error = new Error(message);
     error.status = res.status;
+    error.data = json;
+    if (res.status === 401 && isSessionDead(json, url)) {
+      notifyUnauthorized();
+    }
     throw error;
   }
   return json?.data !== undefined ? json.data : json;
@@ -512,6 +572,195 @@ export const staffApi = {
   /** DELETE /api/retailer/staff/:id */
   remove(id) {
     return request(`${RETAILER_BASE}/staff/${id}`, { method: 'DELETE', auth: true });
+  },
+};
+
+// ─── ERP API ──────────────────────────────────────────────────────────────────
+// Backed by /api/retailer/erp/* (routes/Retailer Management/retailerErpRoutes.js).
+//
+// These modules deliberately do NOT reuse the wholesaler's /api/sales, /api/expenses
+// endpoints: the backend blocks retailer tokens from every ERP_ROUTE_PREFIXES entry
+// (server.js -> denyRetailerErpAccess), and the ERP route files additionally gate
+// writes with `allow('Company Owner', …)`. The retailer ERP surface re-mounts the
+// same company-scoped controllers behind a retailer module guard instead.
+//
+// Every method takes plain object args and returns the unwrapped `data` payload.
+const ERP = `${RETAILER_BASE}/erp`;
+
+export const erpApi = {
+  // ── Dashboard ──
+  // One aggregated payload: KPI cards, this-month P&L, stock buckets, totals,
+  // recent enquiries/orders and the 6-month trend. Replaces the wholesaler's
+  // five-call fan-out, which a retailer token cannot reach.
+  erpDashboard: () => request(`${ERP}/dashboard`, { auth: true }),
+
+  // ── Sales ──
+  listSales:        (params) => request(`${ERP}/sales${toQuery(params)}`, { auth: true }),
+  getSale:          (id)     => request(`${ERP}/sales/${id}`, { auth: true }),
+  createSale:       (body)   => request(`${ERP}/sales`, { method: 'POST', auth: true, body }),
+  recordSalePayment:(id, b)  => request(`${ERP}/sales/${id}/payment`, { method: 'PATCH', auth: true, body: b }),
+  salesReport:      (params) => request(`${ERP}/sales/report${toQuery(params)}`, { auth: true }),
+
+  // ── Expenses ──
+  listExpenses:  (params) => request(`${ERP}/expenses${toQuery(params)}`, { auth: true }),
+  createExpense: (body)   => request(`${ERP}/expenses`, { method: 'POST', auth: true, body }),
+  updateExpense: (id, b)  => request(`${ERP}/expenses/${id}`, { method: 'PUT', auth: true, body: b }),
+  deleteExpense: (id)     => request(`${ERP}/expenses/${id}`, { method: 'DELETE', auth: true }),
+  expenseReport: (params) => request(`${ERP}/reports/expenses${toQuery(params)}`, { auth: true }),
+
+  // ── Profit & Loss ──
+  profitLoss: (params) => request(`${ERP}/profit-loss${toQuery(params)}`, { auth: true }),
+
+  // ── Purchases & suppliers ──
+  listPurchases:     (params) => request(`${ERP}/purchases${toQuery(params)}`, { auth: true }),
+  getPurchase:       (id)     => request(`${ERP}/purchases/${id}`, { auth: true }),
+  createPurchase:    (body)   => request(`${ERP}/purchases`, { method: 'POST', auth: true, body }),
+  updatePurchase:    (id, b)  => request(`${ERP}/purchases/${id}`, { method: 'PUT', auth: true, body: b }),
+  deletePurchase:    (id)     => request(`${ERP}/purchases/${id}`, { method: 'DELETE', auth: true }),
+  purchaseStatus:    (id, b)  => request(`${ERP}/purchases/${id}/status`, { method: 'PATCH', auth: true, body: b }),
+  purchasePayment:   (id, b)  => request(`${ERP}/purchases/${id}/payment`, { method: 'PATCH', auth: true, body: b }),
+  listSuppliers:     (params) => request(`${ERP}/suppliers${toQuery(params)}`, { auth: true }),
+  createSupplier:    (body)   => request(`${ERP}/suppliers`, { method: 'POST', auth: true, body }),
+  updateSupplier:    (id, b)  => request(`${ERP}/suppliers/${id}`, { method: 'PUT', auth: true, body: b }),
+  deleteSupplier:    (id)     => request(`${ERP}/suppliers/${id}`, { method: 'DELETE', auth: true }),
+
+  // ── Inventory ──
+  listInventory:    (params) => request(`${ERP}/inventory${toQuery(params)}`, { auth: true }),
+  getInventoryItem: (id)     => request(`${ERP}/inventory/${id}`, { auth: true }),
+  inventorySummary: ()       => request(`${ERP}/inventory/summary`, { auth: true }),
+  inventoryMovements:(params)=> request(`${ERP}/inventory/movements${toQuery(params)}`, { auth: true }),
+  adjustStock:      (body)   => request(`${ERP}/inventory/adjust`, { method: 'PATCH', auth: true, body }),
+  blockStock:       (body)   => request(`${ERP}/inventory/block`, { method: 'PATCH', auth: true, body }),
+
+  // ── Warehouses ──
+  listWarehouses:   (params) => request(`${ERP}/warehouses${toQuery(params)}`, { auth: true }),
+  createWarehouse:  (body)   => request(`${ERP}/warehouses`, { method: 'POST', auth: true, body }),
+  updateWarehouse:  (id, b)  => request(`${ERP}/warehouses/${id}`, { method: 'PUT', auth: true, body: b }),
+  deleteWarehouse:  (id)     => request(`${ERP}/warehouses/${id}`, { method: 'DELETE', auth: true }),
+  warehouseStock:   (id)     => request(`${ERP}/warehouses/${id}/stock`, { auth: true }),
+
+  // ── Stock transfers ──
+  listTransfers:    (params) => request(`${ERP}/stock-transfers${toQuery(params)}`, { auth: true }),
+  createTransfer:   (body)   => request(`${ERP}/stock-transfers`, { method: 'POST', auth: true, body }),
+  transferStatus:   (id, b)  => request(`${ERP}/stock-transfers/${id}/status`, { method: 'PATCH', auth: true, body: b }),
+
+  // ── Payments ──
+  listReceivables:  (params) => request(`${ERP}/payments/receivables${toQuery(params)}`, { auth: true }),
+  listPayables:     (params) => request(`${ERP}/payments/payables${toQuery(params)}`, { auth: true }),
+  listTransactions: (params) => request(`${ERP}/payments/transactions${toQuery(params)}`, { auth: true }),
+  collectReceivable:(id, b)  => request(`${ERP}/payments/receivables/${id}/collect`, { method: 'POST', auth: true, body: b }),
+  payPayable:       (id, b)  => request(`${ERP}/payments/payables/${id}/pay`, { method: 'POST', auth: true, body: b }),
+
+  // ── Accounts / ledgers ──
+  companyLedger:   (params) => request(`${ERP}/accounts/company${toQuery(params)}`, { auth: true }),
+  cashBook:        (params) => request(`${ERP}/accounts/cash-book${toQuery(params)}`, { auth: true }),
+  bankBook:        (params) => request(`${ERP}/accounts/bank-book${toQuery(params)}`, { auth: true }),
+  // Ledger routes carry the id BOTH as a path segment and as a query param —
+  // the shared controller historically read `req.query.customer_id`, so sending
+  // both makes the call work regardless of which form the backend resolves.
+  customerLedger:  (id, p)  => request(`${ERP}/accounts/customer/${id}${toQuery({ customer_id: id, ...p })}`, { auth: true }),
+  supplierLedger:  (id, p)  => request(`${ERP}/accounts/supplier/${id}${toQuery({ supplier_id: id, ...p })}`, { auth: true }),
+
+  // ── Leads ──
+  listLeads:   (params) => request(`${ERP}/leads${toQuery(params)}`, { auth: true }),
+  createLead:  (body)   => request(`${ERP}/leads`, { method: 'POST', auth: true, body }),
+  updateLead:  (id, b)  => request(`${ERP}/leads/${id}`, { method: 'PUT', auth: true, body: b }),
+  convertLead: (id, b)  => request(`${ERP}/leads/${id}/convert`, { method: 'PATCH', auth: true, body: b }),
+  deleteLead:  (id)     => request(`${ERP}/leads/${id}`, { method: 'DELETE', auth: true }),
+
+  // ── Lead follow-ups (per-lead scheduling, mirrors wholesaler parity) ──
+  listFollowups:   (params) => request(`${ERP}/followups${toQuery(params)}`, { auth: true }),
+  createFollowup:  (body)   => request(`${ERP}/followups`, { method: 'POST', auth: true, body }),
+  updateFollowup:  (id, b)  => request(`${ERP}/followups/${id}`, { method: 'PUT', auth: true, body: b }),
+  deleteFollowup:  (id)     => request(`${ERP}/followups/${id}`, { method: 'DELETE', auth: true }),
+
+  // ── ERP customers (distinct from the marketplace customerApi above) ──
+  listErpCustomers:   (params) => request(`${ERP}/erp-customers${toQuery(params)}`, { auth: true }),
+  createErpCustomer:  (body)   => request(`${ERP}/erp-customers`, { method: 'POST', auth: true, body }),
+  updateErpCustomer:  (id, b)  => request(`${ERP}/erp-customers/${id}`, { method: 'PUT', auth: true, body: b }),
+  deleteErpCustomer:  (id)     => request(`${ERP}/erp-customers/${id}`, { method: 'DELETE', auth: true }),
+
+  // ── Dispatch ──
+  // Dispatch is the retailer's own final stock-out step (create → In Transit →
+  // Delivered). Creating one reduces physical stock; marking delivered
+  // auto-creates the Sale + Receivable on the backend.
+  listDispatches:    (params) => request(`${ERP}/dispatches${toQuery(params)}`, { auth: true }),
+  getDispatch:       (id)     => request(`${ERP}/dispatches/${id}`, { auth: true }),
+  /**
+   * Orders this retailer can still dispatch, for the entry form's order picker.
+   * Returns { orders, counts }. Orders that already have a dispatch are excluded
+   * because createDispatch rejects them with 409.
+   */
+  dispatchableOrders: ()      => request(`${ERP}/dispatches/dispatchable-orders`, { auth: true }),
+  createDispatch:    (body)   => request(`${ERP}/dispatches`, { method: 'POST', auth: true, body }),
+  dispatchInTransit: (id)     => request(`${ERP}/dispatches/${id}/intransit`, { method: 'PATCH', auth: true }),
+  dispatchDeliver:   (id, b)  => request(`${ERP}/dispatches/${id}/deliver`, { method: 'PATCH', auth: true, body: b }),
+  updateDispatch:    (id, b)  => request(`${ERP}/dispatches/${id}`, { method: 'PUT', auth: true, body: b }),
+
+  /**
+   * Upload a proof-of-delivery image and return `{ url }`.
+   * `file` is a picker result: { uri, type, name }. The backend multer field is
+   * literally "pod" — the name below must match `podUpload` in
+   * middleware/podUpload.js or the request 400s with "No image received."
+   */
+  uploadDispatchPod(file) {
+    const form = new FormData();
+    form.append('pod', {
+      uri:  file.uri,
+      type: file.type || 'image/jpeg',
+      name: file.name || 'pod.jpg',
+    });
+    return uploadMultipart(`${ERP}/dispatches/upload-pod`, form, 60000);
+  },
+
+  // ── Documents (repository) ──
+  // Wholesaler parity: a free-form document store — GST certificate, purchase /
+  // sales bills, catalogues, price lists — with typed filter tabs, open and
+  // delete. Distinct from the KYC flow (authApi.uploadDocs), which feeds the
+  // company's verification record and is reviewed by the CRM.
+  // Backed by the shared documentController, scoped to req.user.company_id.
+  listDocuments:  (params) => request(`${ERP}/documents${toQuery(params)}`, { auth: true }),
+  deleteDocument: (id)     => request(`${ERP}/documents/${id}`, { method: 'DELETE', auth: true }),
+
+  /**
+   * Upload one document. `file` is a picker result: { uri, type, name }.
+   * The backend multer field is literally "file" (see `uploadDocs` in
+   * middleware/upload.js) — renaming it 400s with "No files uploaded.".
+   * `entity_type` is required by the controller and groups the file under the
+   * company's document set; `doc_type` is the free-text tag shown in the tabs.
+   */
+  uploadDocument(file, docType = 'Other') {
+    const form = new FormData();
+    form.append('file', {
+      uri:  file.uri,
+      type: file.type || 'application/octet-stream',
+      name: file.name || `doc_${Date.now()}`,
+    });
+    form.append('entity_type', 'company');
+    form.append('doc_type', docType);
+    return uploadMultipart(`${ERP}/documents`, form, 60000);
+  },
+
+  // ── Reports ──
+  reportSales:     (params) => request(`${ERP}/reports/sales${toQuery(params)}`, { auth: true }),
+  reportPurchases: (params) => request(`${ERP}/reports/purchases${toQuery(params)}`, { auth: true }),
+  reportCustomers: (params) => request(`${ERP}/reports/customers${toQuery(params)}`, { auth: true }),
+  reportSuppliers: (params) => request(`${ERP}/reports/suppliers${toQuery(params)}`, { auth: true }),
+  reportInventory: (params) => request(`${ERP}/reports/inventory${toQuery(params)}`, { auth: true }),
+  analytics:       (params) => request(`${ERP}/reports/analytics${toQuery(params)}`, { auth: true }),
+
+  // Authenticated download URL for PDF/Excel export. The token is appended as a
+  // query param because Linking.openURL (used to open the file) cannot set an
+  // Authorization header. Mirrors the wholesaler's reportsService.reportExportUrl.
+  // type ∈ sales | purchases | expenses | inventory (what the controller supports).
+  reportExportUrl: async (type, { format = 'excel', from_date, to_date, group_by } = {}) => {
+    const token = await AsyncStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    const qs = new URLSearchParams({ format });
+    if (from_date) qs.append('from_date', from_date);
+    if (to_date)   qs.append('to_date', to_date);
+    if (group_by)  qs.append('group_by', group_by);
+    if (token)     qs.append('token', token);
+    return `${ERP}/reports/${type}/export?${qs.toString()}`;
   },
 };
 

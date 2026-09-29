@@ -126,11 +126,56 @@ export const SCREENS = {
 
   // Profile
   COMPANY_DETAILS: 'CompanyDetails',
+  // KYC verification — the four fixed document slots the CRM reviews before
+  // approving the company. NOT the document repository below.
   DOCUMENTS: 'Documents',
   SUBSCRIPTION: 'Subscription',
   NOTIFICATION_SETTINGS: 'NotificationSettings',
   CHANGE_PASSWORD: 'ChangePassword',
   HELP_SUPPORT: 'HelpSupport',
+
+  // ── ERP modules (wholesaler parity) ──────────────────────────
+  // Sales
+  SALES_LIST:       'SalesList',
+  SALES_ENTRY:      'SalesEntry',
+  SALES_REPORT:     'SalesReport',
+  // Expense
+  EXPENSE_LIST:     'ExpenseList',
+  EXPENSE_ENTRY:    'ExpenseEntry',
+  EXPENSE_REPORT:   'ExpenseReport',
+  // Profit & Loss
+  PROFIT_LOSS:      'ProfitLoss',
+  // Purchase
+  PURCHASE_LIST:    'PurchaseList',
+  PURCHASE_ENTRY:   'PurchaseEntry',
+  SUPPLIER_LIST:    'SupplierList',
+  // Inventory
+  INVENTORY:        'Inventory',
+  STOCK_ADJUST:     'StockAdjust',
+  STOCK_TRANSFER:   'StockTransfer',
+  WAREHOUSE_LIST:   'WarehouseList',
+  // Payments & accounts
+  PAYMENT_RECEIVABLE: 'PaymentReceivable',
+  PAYMENT_PAYABLE:    'PaymentPayable',
+  ACCOUNTS:           'Accounts',
+  CUSTOMER_LEDGER:    'CustomerLedger',
+  // CRM
+  LEAD_LIST:        'LeadList',
+  CUSTOMER_LIST:    'CustomerList',
+  // Reports
+  REPORT_CENTER:    'ReportCenter',
+  ANALYTICS:        'Analytics',
+  // Dispatch — OUTBOUND shipments the retailer raises for its own orders.
+  // Distinct from DISPATCH_DETAILS above, which is the read-only view of an
+  // INBOUND dispatch raised by a seller against one of the retailer's orders.
+  DISPATCH_TRACKING: 'DispatchTracking',
+  DISPATCH_ENTRY:    'DispatchEntry',
+  // Documents — free-form repository (typed uploads, filter tabs, list, open,
+  // delete), matching the wholesaler's Documents screen. Distinct from the KYC
+  // screen at DOCUMENTS above, which is a fixed 4-slot verification flow.
+  DOCUMENT_REPOSITORY: 'DocumentRepository',
+  // Tools (client-side only — no backend routes)
+  STONE_CALC:       'StoneCalculation',
 };
 
 // Units

@@ -27,6 +27,17 @@ const MODULE_LABELS = {
   customers:     'Customers',
   notifications: 'Notifications',
   reports:       'Reports',
+  // ── ERP modules (added 2026-09-29) ──
+  sales:         'Sales',
+  purchases:     'Purchase',
+  inventory:     'Inventory',
+  expenses:      'Expense',
+  payments:      'Payments',
+  accounts:      'Accounts',
+  profit_loss:   'Profit & Loss',
+  leads:         'Leads',
+  dispatches:    'Dispatch',
+  documents:     'Documents',
 };
 
 // ─── Single staff card ────────────────────────────────────────

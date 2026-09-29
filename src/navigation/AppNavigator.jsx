@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -11,6 +11,7 @@ import { Typography } from '../theme/typography';
 import { Shadows } from '../theme/spacing';
 import { SCREENS } from '../constants';
 import { setNavigationRef } from '../services/notificationService';
+import { useAuth } from '../context/AuthContext';
 
 // Auth Screens
 import SplashScreen from '../screens/auth/SplashScreen';
@@ -72,6 +73,35 @@ import {
 import StaffListScreen    from '../screens/staff/StaffListScreen';
 import AddEditStaffScreen from '../screens/staff/AddEditStaffScreen';
 
+// ── ERP Screens (wholesaler parity) ──────────────────────────────────────────
+import SalesListScreen    from '../screens/erp/SalesListScreen';
+import SalesEntryScreen   from '../screens/erp/SalesEntryScreen';
+import SalesReportScreen  from '../screens/erp/SalesReportScreen';
+import ExpenseListScreen   from '../screens/erp/ExpenseListScreen';
+import ExpenseEntryScreen  from '../screens/erp/ExpenseEntryScreen';
+import ExpenseReportScreen from '../screens/erp/ExpenseReportScreen';
+import ProfitLossScreen    from '../screens/erp/ProfitLossScreen';
+import InventoryScreen     from '../screens/erp/InventoryScreen';
+import StockAdjustScreen   from '../screens/erp/StockAdjustScreen';
+import StockTransferScreen from '../screens/erp/StockTransferScreen';
+import WarehouseListScreen from '../screens/erp/WarehouseListScreen';
+import PurchaseListScreen  from '../screens/erp/PurchaseListScreen';
+import PurchaseEntryScreen from '../screens/erp/PurchaseEntryScreen';
+import SupplierListScreen  from '../screens/erp/SupplierListScreen';
+import { PaymentReceivableScreen, PaymentPayableScreen } from '../screens/erp/PaymentListScreen';
+import AccountsScreen      from '../screens/erp/AccountsScreen';
+import PartyLedgerScreen   from '../screens/erp/PartyLedgerScreen';
+import CustomerListScreen  from '../screens/erp/CustomerListScreen';
+import LeadListScreen      from '../screens/erp/LeadListScreen';
+import ReportCenterScreen  from '../screens/erp/ReportCenterScreen';
+import AnalyticsScreen     from '../screens/erp/AnalyticsScreen';
+import DispatchTrackingScreen from '../screens/erp/DispatchTrackingScreen';
+import DispatchEntryScreen    from '../screens/erp/DispatchEntryScreen';
+import DocumentRepositoryScreen from '../screens/erp/DocumentRepositoryScreen';
+
+// ── Tools (client-side, no backend) ──────────────────────────────────────────
+import StoneCalculationScreen from '../screens/tools/StoneCalculationScreen';
+
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
@@ -79,7 +109,7 @@ const Tab = createBottomTabNavigator();
 const TAB_CONFIG = {
   HomeTab:             { icon: 'home-outline',           iconActive: 'home',             label: 'Home' },
   [SCREENS.SEARCH]:    { icon: 'search-outline',    iconActive: 'search',           label: 'Search' },
-  [SCREENS.ENQUIRIES]: { icon: 'document-text-outline', iconActive: 'document-text', label: 'Quotations' },
+  [SCREENS.ENQUIRIES]: { icon: 'chatbubble-ellipses-outline', iconActive: 'chatbubble-ellipses', label: 'Enquiries' },
   [SCREENS.ORDERS]:    { icon: 'cube-outline',      iconActive: 'cube',             label: 'Orders' },
   [SCREENS.PROFILE]:   { icon: 'person-outline',    iconActive: 'person',           label: 'Profile' },
 };
@@ -146,8 +176,51 @@ const MainTabs = () => (
 // ─── Root Stack ─────────────────────────────────────────────────────────────────
 export const navigationRef = React.createRef();
 
-const AppNavigator = React.forwardRef((props, ref) => (
-  <NavigationContainer ref={ref || navigationRef} onReady={() => setNavigationRef(ref || navigationRef)}>
+/**
+ * Reactive auth gate.
+ *
+ * SplashScreen decides the initial route ONCE at startup, so it cannot react to
+ * a session dying later (expired JWT → global 401 handler in `api.js` clears the
+ * session and nulls the user). Without this, the app would stay on the
+ * authenticated stack with a dead token and every request would fail with
+ * "Invalid or expired token".
+ *
+ * When `user` transitions from set → null while the user is past the auth
+ * screens, reset the stack to Login.
+ */
+function useSessionGate() {
+  const { user } = useAuth();
+  const wasLoggedIn = useRef(false);
+
+  useEffect(() => {
+    if (user) {
+      wasLoggedIn.current = true;
+      return;
+    }
+    // Only bounce if we were previously signed in — otherwise this would fight
+    // the normal startup flow (Splash → Login) and the logout button itself.
+    if (!wasLoggedIn.current) return;
+    wasLoggedIn.current = false;
+
+    const nav = navigationRef.current;
+    if (!nav?.isReady?.()) return;
+
+    const current = nav.getCurrentRoute?.()?.name;
+    // Already on an auth screen (e.g. the user pressed Logout) — nothing to do.
+    const AUTH_ROUTES = [
+      SCREENS.SPLASH, SCREENS.LOGIN, SCREENS.REGISTER,
+      SCREENS.OTP_VERIFY, SCREENS.PENDING_APPROVAL,
+    ];
+    if (AUTH_ROUTES.includes(current)) return;
+
+    nav.reset({ index: 0, routes: [{ name: SCREENS.LOGIN }] });
+  }, [user]);
+}
+
+const AppNavigator = React.forwardRef((props, ref) => {
+  useSessionGate();
+  return (
+    <NavigationContainer ref={ref || navigationRef} onReady={() => setNavigationRef(ref || navigationRef)}>
     <Stack.Navigator
       initialRouteName={SCREENS.SPLASH}
       screenOptions={{ headerShown: false, animation: 'slide_from_right' }}
@@ -234,9 +307,66 @@ const AppNavigator = React.forwardRef((props, ref) => (
         component={AddEditStaffScreen}
         options={{ animation: 'slide_from_bottom' }}
       />
+
+      {/* ── ERP modules (wholesaler parity) ── */}
+      <Stack.Screen name={SCREENS.SALES_LIST}    component={SalesListScreen} />
+      <Stack.Screen name={SCREENS.SALES_REPORT}  component={SalesReportScreen} />
+      <Stack.Screen
+        name={SCREENS.SALES_ENTRY}
+        component={SalesEntryScreen}
+        options={{ animation: 'slide_from_bottom' }}
+      />
+
+      <Stack.Screen name={SCREENS.EXPENSE_LIST}   component={ExpenseListScreen} />
+      <Stack.Screen name={SCREENS.EXPENSE_REPORT} component={ExpenseReportScreen} />
+      <Stack.Screen name={SCREENS.PROFIT_LOSS}    component={ProfitLossScreen} />
+      <Stack.Screen
+        name={SCREENS.EXPENSE_ENTRY}
+        component={ExpenseEntryScreen}
+        options={{ animation: 'slide_from_bottom' }}
+      />
+
+      <Stack.Screen name={SCREENS.INVENTORY}      component={InventoryScreen} />
+      <Stack.Screen name={SCREENS.WAREHOUSE_LIST} component={WarehouseListScreen} />
+      <Stack.Screen name={SCREENS.STOCK_TRANSFER} component={StockTransferScreen} />
+      <Stack.Screen
+        name={SCREENS.STOCK_ADJUST}
+        component={StockAdjustScreen}
+        options={{ animation: 'slide_from_bottom' }}
+      />
+
+      <Stack.Screen name={SCREENS.PURCHASE_LIST} component={PurchaseListScreen} />
+      <Stack.Screen name={SCREENS.SUPPLIER_LIST} component={SupplierListScreen} />
+      <Stack.Screen
+        name={SCREENS.PURCHASE_ENTRY}
+        component={PurchaseEntryScreen}
+        options={{ animation: 'slide_from_bottom' }}
+      />
+
+      <Stack.Screen name={SCREENS.PAYMENT_RECEIVABLE} component={PaymentReceivableScreen} />
+      <Stack.Screen name={SCREENS.PAYMENT_PAYABLE}    component={PaymentPayableScreen} />
+      <Stack.Screen name={SCREENS.ACCOUNTS}           component={AccountsScreen} />
+      <Stack.Screen name={SCREENS.CUSTOMER_LEDGER}    component={PartyLedgerScreen} />
+
+      <Stack.Screen name={SCREENS.CUSTOMER_LIST}      component={CustomerListScreen} />
+      <Stack.Screen name={SCREENS.LEAD_LIST}          component={LeadListScreen} />
+      <Stack.Screen name={SCREENS.REPORT_CENTER}      component={ReportCenterScreen} />
+      <Stack.Screen name={SCREENS.ANALYTICS}          component={AnalyticsScreen} />
+
+      <Stack.Screen name={SCREENS.DISPATCH_TRACKING}  component={DispatchTrackingScreen} />
+      <Stack.Screen
+        name={SCREENS.DISPATCH_ENTRY}
+        component={DispatchEntryScreen}
+        options={{ animation: 'slide_from_bottom' }}
+      />
+
+      <Stack.Screen name={SCREENS.DOCUMENT_REPOSITORY} component={DocumentRepositoryScreen} />
+
+      <Stack.Screen name={SCREENS.STONE_CALC}         component={StoneCalculationScreen} />
     </Stack.Navigator>
-  </NavigationContainer>
-));
+    </NavigationContainer>
+  );
+});
 
 // ─── Styles ──────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({

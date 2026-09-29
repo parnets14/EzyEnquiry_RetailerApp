@@ -132,17 +132,31 @@ export default function ProfileScreen({ navigation }) {
           </View>
         </View>
 
-        {/* ═══ BILLING ═══ */}
-        <Text style={st.secTitle}>Billing</Text>
+        {/* ═══ BILLING / FINANCE ═══
+            Finance entry points that deliberately do NOT sit on the Home
+            dashboard's Finance tile group. The wholesaler keeps these in its
+            "Payments & Finance" section on the More screen
+            (`settings/MoreMenuScreen.jsx`) rather than the dashboard, so the two
+            dashboards stay identical — see HomeScreen `MODULE_GROUPS`. Without
+            these rows `Accounts` would have no entry point at all. */}
+        <Text style={st.secTitle}>Billing &amp; Finance</Text>
         <View style={st.menuCard}>
-          <MenuItem icon="receipt-outline" color={Colors.primary} label="Invoices & Payments" onPress={() => navigation.navigate(SCREENS.INVOICES)} last />
+          <MenuItem icon="receipt-outline"   color={Colors.primary}   label="Invoices & Payments"   onPress={() => navigation.navigate(SCREENS.INVOICES)} />
+          <MenuItem icon="cash-outline"      color="#059669"          label="Payment Receivable"    onPress={() => navigation.navigate(SCREENS.PAYMENT_RECEIVABLE)} />
+          <MenuItem icon="wallet-outline"    color="#DC2626"          label="Payment Payable"       onPress={() => navigation.navigate(SCREENS.PAYMENT_PAYABLE)} />
+          <MenuItem icon="book-outline"      color="#2563EB"          label="Accounts"              onPress={() => navigation.navigate(SCREENS.ACCOUNTS)} />
+          {/* Retailer-only module — the wholesaler has no supplier screen. Kept
+              reachable here now that the Purchase list header matches the
+              wholesaler (back · title · + only). */}
+          <MenuItem icon="people-outline"    color="#7C3AED"          label="Suppliers"             onPress={() => navigation.navigate(SCREENS.SUPPLIER_LIST)} last />
         </View>
 
         {/* ═══ MENU ═══ */}
         <Text style={st.secTitle}>Settings</Text>
         <View style={st.menuCard}>
           <MenuItem icon="create-outline"          color="#2980B9"       label="Edit Company"      onPress={() => navigation.navigate(SCREENS.COMPANY_DETAILS)} />
-          <MenuItem icon="document-attach-outline" color="#27AE60"       label="Documents"         onPress={() => navigation.navigate(SCREENS.DOCUMENTS)} />
+          <MenuItem icon="folder-outline"          color="#0891B2"       label="Documents"         onPress={() => navigation.navigate(SCREENS.DOCUMENT_REPOSITORY)} />
+          <MenuItem icon="shield-checkmark-outline" color="#27AE60"      label="KYC Verification"  onPress={() => navigation.navigate(SCREENS.DOCUMENTS)} />
           <MenuItem icon="people-outline"          color={Colors.secondary} label="My Staff"       onPress={() => navigation.navigate(SCREENS.STAFF_LIST)} />
           <MenuItem icon="star-outline"            color="#F59E0B"       label="Subscription"      onPress={() => navigation.navigate(SCREENS.SUBSCRIPTION)} />
           <MenuItem icon="notifications-outline"   color="#8E44AD"       label="Notifications"     onPress={() => navigation.navigate(SCREENS.NOTIFICATION_SETTINGS)} />

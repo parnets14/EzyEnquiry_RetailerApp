@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { authApi, session } from '../utils/api';
+import { authApi, session, setUnauthorizedHandler } from '../utils/api';
 import {
   requestPermission,
   registerFcmToken,
@@ -37,8 +37,17 @@ export function AuthProvider({ children }) {
               setUserState(fresh);
               await session.save(undefined, fresh); // keep cache in sync
             }
-          } catch {
-            // token invalid/expired or offline — keep cached user
+          } catch (e) {
+            // A 401 here means the stored token is dead. `api.js` has already
+            // cleared the session and fired the unauthorized handler, which sets
+            // user to null — so we must NOT restore the cached user, or the app
+            // would sit on the authenticated stack with a token that no longer
+            // works and every screen would show "Invalid or expired token".
+            // Any other failure (offline, server down) keeps the cache so the
+            // user can still open the app without a connection.
+            if (e?.status === 401) {
+              setUserState(null);
+            }
           }
         }
       } finally {
@@ -85,6 +94,24 @@ export function AuthProvider({ children }) {
       await session.clear();
       setUserState(null);
     }
+  }, []);
+
+  /**
+   * Global session-expiry handler.
+   *
+   * `api.js` calls this whenever an authenticated request comes back 401 with a
+   * dead-session message. The stored token has ALREADY been cleared by the time
+   * we get here, so we only need to drop the in-memory user — the navigator then
+   * falls back to the Login stack on its own.
+   *
+   * Deliberately does NOT call `logout()`: that would fire a network request
+   * with a token we already know is invalid.
+   */
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setUserState(null);
+    });
+    return () => setUnauthorizedHandler(null);
   }, []);
 
   return (

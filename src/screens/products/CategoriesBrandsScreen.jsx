@@ -65,6 +65,18 @@ const CategoriesBrandsScreen = ({ navigation }) => {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
+  // This screen is reachable from two places: the Search screen header (no form
+  // underneath) and the Add Product form's "Manage Categories & Brands" button.
+  // React Navigation 7's navigate() no longer pops back to an existing route, so
+  // coming from the form would stack a SECOND empty Add Product screen on top.
+  // Pop back to the open form instead when there is one.
+  const openProductForm = () => {
+    const alreadyOpen = (navigation.getState()?.routes || [])
+      .some(r => r.name === SCREENS.ADD_PRODUCT);
+    if (alreadyOpen) navigation.popTo(SCREENS.ADD_PRODUCT);
+    else navigation.navigate(SCREENS.ADD_PRODUCT);
+  };
+
   // ── Category ──────────────────────────────────────────────
   const saveCategory = async () => {
     const v = catName.trim();
@@ -334,7 +346,7 @@ const CategoriesBrandsScreen = ({ navigation }) => {
             <TouchableOpacity
               style={styles.continueBtn}
               activeOpacity={0.9}
-              onPress={() => navigation.navigate(SCREENS.ADD_PRODUCT)}
+              onPress={openProductForm}
             >
               <Ionicons name="cube-outline" size={18} color="#FFF" />
               <Text style={styles.continueText}>Add Item / Product</Text>

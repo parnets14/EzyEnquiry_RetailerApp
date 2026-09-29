@@ -14,7 +14,7 @@ import { Platform } from 'react-native';
  */
 
 // ─── Production backend (Render) ──────────────────────────────────────────────
-const PRODUCTION_HOST = 'https://ezyenquiry-backend.onrender.com';
+const PRODUCTION_HOST = 'http://192.168.1.45:5000';
 
 export const API_HOST = PRODUCTION_HOST;
 

@@ -5,13 +5,17 @@
  * identical to `wholesalerapp/src/screens/product/AddProductScreen.jsx` so
  * staff moving between the two apps see the same form.
  *
- *   Step 1 — Select Category        (chips + inline create)
- *   Step 2 — Sub-Category           (chips + inline create, only when the
- *                                    chosen category actually has sub-categories)
- *   Step 3 — Brand                  (chips + inline create)
+ *   Step 1 — Select Category        (chips, + "Manage Categories & Brands")
+ *   Step 2 — Sub-Category           (chips, only when the chosen category
+ *                                    actually has sub-categories)
+ *   Step 3 — Brand                  (chips)
  *   Step 4 — Product Details        (name, code, category-driven dynamic fields)
  *   Step 5 — Unit, Pricing & Stock
  *   Step 6 — Images
+ *
+ * Categories, sub-categories and brands are created on the Categories & Brands
+ * screen (`SCREENS.CATEGORIES_BRANDS`), reached from the Step 1 card. The form
+ * deliberately has NO inline create — the wholesaler's has none either.
  *
  * Step numbers are dynamic: when a category has no sub-categories the
  * Sub-Category step is skipped and every later step shifts down by one,
@@ -19,7 +23,7 @@
  *
  * Category-specific values are stored in Product.attributes on the backend.
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, StatusBar,
   TouchableOpacity, KeyboardAvoidingView, Platform,
@@ -27,6 +31,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { launchImageLibrary } from 'react-native-image-picker';
 import { Colors } from '../../theme/colors';
@@ -36,6 +41,7 @@ import { fieldOptionsService } from '../../services/fieldOptionsService';
 import {
   categoryTypeFromName, fieldsForType, CATEGORY_UNIT, UNIT_OPTIONS,
 } from '../../utils/categoryFields';
+import { SCREENS } from '../../constants';
 
 const MAX_IMAGES = 10;
 const ORANGE     = Colors.primary;    // #F4500A
@@ -79,12 +85,15 @@ function ChipRow({ items, activeId, onPick }) {
   );
 }
 
-// ── Inline "Add new …" button ────────────────────────────────
-function AddNewBtn({ label, onPress }) {
+// ── Full-width link to the Categories & Brands manager ───────
+// Mirrors the wholesaler form, where the whole taxonomy is edited on its own
+// screen instead of one popup per item.
+function ManageBtn({ onPress }) {
   return (
-    <TouchableOpacity style={s.addNewBtn} onPress={onPress} activeOpacity={0.8}>
-      <Ionicons name="add-circle-outline" size={16} color={ORANGE} />
-      <Text style={s.addNewTxt}>Add new {label}</Text>
+    <TouchableOpacity style={s.manageBtn} onPress={onPress} activeOpacity={0.85}>
+      <Ionicons name="settings-outline" size={16} color={ORANGE} />
+      <Text style={s.manageBtnTxt}>Manage Categories & Brands</Text>
+      <Ionicons name="chevron-forward" size={16} color={ORANGE} />
     </TouchableOpacity>
   );
 }
@@ -195,10 +204,8 @@ export default function AddProductScreen({ navigation, route }) {
 
   // UI state
   const [saving,    setSaving]   = useState(false);
-  const [activeModal, setModal]  = useState(null); // 'unit' | 'select' | 'newCat' | 'newSub' | 'newBrand'
+  const [activeModal, setModal]  = useState(null); // 'unit' | 'select'
   const [selectField, setSelectField] = useState(null);
-  const [modalInput,  setModalInput]  = useState('');
-  const [modalSaving, setModalSaving] = useState(false);
 
   // Custom dropdown options the user has added (persisted), keyed by field key.
   const [customOptions, setCustomOptions] = useState({});
@@ -255,7 +262,9 @@ export default function AddProductScreen({ navigation, route }) {
   };
 
   // ── Load taxonomy ─────────────────────────────────────────
-  const loadTaxonomy = async () => {
+  // Only touches setters + the catalog API, so an empty dep list is honest and
+  // keeps the identity stable for the focus effect below.
+  const loadTaxonomy = useCallback(async () => {
     setTaxLoading(true);
     try {
       const [catRes, brandRes] = await Promise.all([
@@ -274,9 +283,29 @@ export default function AddProductScreen({ navigation, route }) {
     } finally {
       setTaxLoading(false);
     }
-  };
+  }, []);
 
-  useEffect(() => { loadTaxonomy(); }, []);
+  // Reload on focus, not just on mount: the Categories & Brands screen can add
+  // items while this form sits in the background, and the new chips have to show
+  // up when the user comes back.
+  useFocusEffect(useCallback(() => { loadTaxonomy(); }, [loadTaxonomy]));
+
+  // Re-point the current picks at the freshly-loaded objects. Without this a
+  // selected category would keep a stale `sub_categories` array (the chip list
+  // is derived from `category`), so sub-categories added on the manager screen
+  // would never appear.
+  useEffect(() => {
+    setCategory(prev => (prev ? categories.find(c => String(c._id) === String(prev._id)) || prev : prev));
+    setBrand(prev => (prev ? brands.find(b => String(b._id) === String(prev._id)) || prev : prev));
+  }, [categories, brands]);
+
+  // Drop a sub-category pick that no longer exists after a taxonomy refresh.
+  useEffect(() => {
+    setSubCategory(prev => {
+      if (!prev) return prev;
+      return (category?.sub_categories || []).find(su => String(su._id) === String(prev._id)) || null;
+    });
+  }, [category]);
 
   // Pre-normalise the edit payload's category/sub/brand identifiers once, so the
   // pre-select effect below depends on stable primitives instead of the whole
@@ -333,42 +362,6 @@ export default function AddProductScreen({ navigation, route }) {
   const detailsN = hasSubs ? 4 : 3;
   const pricingN = hasSubs ? 5 : 4;
   const imagesN  = hasSubs ? 6 : 5;
-
-  // ── Create taxonomy items ─────────────────────────────────
-  const submitModal = async () => {
-    const val = modalInput.trim();
-    if (!val) return;
-    setModalSaving(true);
-    try {
-      if (activeModal === 'newCat') {
-        await catalogApi.createCategory({ name: val });
-        const fresh = await loadTaxonomy();
-        const picked = (fresh.cats || []).find(c => c.name?.toLowerCase() === val.toLowerCase());
-        if (picked) { setCategory(picked); setSubCategory(null); }
-      } else if (activeModal === 'newSub') {
-        if (!category?._id) { Alert.alert('Select a category first'); return; }
-        await catalogApi.createSubCategory({ name: val, category_id: category._id });
-        const fresh = await loadTaxonomy();
-        const freshCat = (fresh.cats || []).find(c => String(c._id) === String(category._id));
-        if (freshCat) {
-          setCategory(freshCat);
-          const picked = (freshCat.sub_categories || []).find(s => s.name?.toLowerCase() === val.toLowerCase());
-          if (picked) setSubCategory(picked);
-        }
-      } else if (activeModal === 'newBrand') {
-        await catalogApi.createBrand({ name: val });
-        const fresh = await loadTaxonomy();
-        const picked = (fresh.brnds || []).find(b => b.name?.toLowerCase() === val.toLowerCase());
-        if (picked) setBrand(picked);
-      }
-      setModal(null);
-      setModalInput('');
-    } catch (err) {
-      Alert.alert('Failed', err?.message || 'Could not save. Try again.');
-    } finally {
-      setModalSaving(false);
-    }
-  };
 
   // ── Image picker ──────────────────────────────────────────
   const pickImages = async () => {
@@ -494,7 +487,7 @@ export default function AddProductScreen({ navigation, route }) {
             ) : (
               <>
                 {categories.length === 0 ? (
-                  <Text style={s.mutedTxt}>No categories yet. Tap "Add new Category" to create one.</Text>
+                  <Text style={s.mutedTxt}>No categories yet. Tap "Manage Categories & Brands" to add.</Text>
                 ) : (
                   <ChipRow
                     items={categories}
@@ -502,10 +495,12 @@ export default function AddProductScreen({ navigation, route }) {
                     onPick={c => { setCategory(c); setSubCategory(null); }}
                   />
                 )}
-                <AddNewBtn label="Category" onPress={() => { setModalInput(''); setModal('newCat'); }} />
-                {!!errors._category && <Text style={s.errTxt}>{errors._category}</Text>}
               </>
             )}
+            {/* Same entry point as the wholesaler form — the full taxonomy lives on
+                its own screen. Kept outside the loading branch so it stays tappable. */}
+            <ManageBtn onPress={() => navigation.navigate(SCREENS.CATEGORIES_BRANDS)} />
+            {!!errors._category && <Text style={s.errTxt}>{errors._category}</Text>}
           </View>
 
           {/* ── STEP 2 — Sub-Category (only when the category has subs) ── */}
@@ -528,7 +523,7 @@ export default function AddProductScreen({ navigation, route }) {
               <StepLabel n={hasSubs ? '3' : '2'} text="Select Brand" />
               <View style={s.card}>
                 {brands.length === 0 ? (
-                  <Text style={s.mutedTxt}>No brands yet. Tap "Add new Brand" to create one.</Text>
+                  <Text style={s.mutedTxt}>No brands yet. Tap "Manage Categories & Brands" to add.</Text>
                 ) : (
                   <ChipRow
                     items={brands}
@@ -536,7 +531,6 @@ export default function AddProductScreen({ navigation, route }) {
                     onPick={b => setBrand(prev => prev?._id === b._id ? null : b)}
                   />
                 )}
-                <AddNewBtn label="Brand" onPress={() => { setModalInput(''); setModal('newBrand'); }} />
                 {!!errors._brand && <Text style={s.errTxt}>{errors._brand}</Text>}
               </View>
             </>
@@ -840,49 +834,6 @@ export default function AddProductScreen({ navigation, route }) {
         </Pressable>
       </Modal>
 
-      {/* Create Category / Sub-Category / Brand */}
-      {['newCat', 'newSub', 'newBrand'].map(type => (
-        <Modal key={type} visible={activeModal === type} transparent animationType="fade"
-          onRequestClose={() => { setModal(null); setModalInput(''); }}>
-          <Pressable style={s.overlay} onPress={() => { setModal(null); setModalInput(''); }}>
-            <Pressable style={s.modalCard} onPress={() => {}}>
-              <Text style={s.modalTitle}>
-                {type === 'newCat'   ? 'Add Category'
-                : type === 'newSub'  ? 'Add Sub-Category'
-                :                      'Add Brand'}
-              </Text>
-              <RNTextInput
-                style={s.modalInput}
-                value={modalInput}
-                onChangeText={setModalInput}
-                autoFocus
-                placeholder={
-                  type === 'newCat'  ? 'e.g. Tiles, Granite, Marble'
-                  : type === 'newSub' ? 'e.g. Floor Tiles, Slabs'
-                  :                     'e.g. Kajaria, Nitco'
-                }
-                placeholderTextColor={MUTED}
-              />
-              <View style={s.modalBtnRow}>
-                <TouchableOpacity
-                  style={s.btnGhost}
-                  onPress={() => { setModal(null); setModalInput(''); }}>
-                  <Text style={s.btnGhostTxt}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[s.btnPrimary, modalSaving && { opacity: 0.6 }]}
-                  onPress={submitModal}
-                  disabled={modalSaving}>
-                  {modalSaving
-                    ? <ActivityIndicator size="small" color="#FFF" />
-                    : <Text style={s.btnPrimaryTxt}>Add</Text>}
-                </TouchableOpacity>
-              </View>
-            </Pressable>
-          </Pressable>
-        </Modal>
-      ))}
-
     </SafeAreaView>
   );
 }
@@ -920,8 +871,8 @@ const s = StyleSheet.create({
   chipTxtOn:   { color: ORANGE },
 
   // Add new button
-  addNewBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', paddingHorizontal: 12, paddingVertical: 9, borderRadius: 10, borderWidth: 1.5, borderColor: ORANGE, borderStyle: 'dashed', backgroundColor: Colors.primaryBg },
-  addNewTxt: { fontSize: 12, fontWeight: '800', color: ORANGE },
+  manageBtn:    { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 11, borderRadius: 10, borderWidth: 1.5, borderColor: ORANGE, borderStyle: 'dashed', backgroundColor: Colors.primaryBg },
+  manageBtnTxt: { flex: 1, fontSize: 12.5, fontWeight: '800', color: ORANGE },
 
   // Gate hint
   gateHint:    { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Colors.primaryBg, borderRadius: 12, padding: 14, marginBottom: 14 },

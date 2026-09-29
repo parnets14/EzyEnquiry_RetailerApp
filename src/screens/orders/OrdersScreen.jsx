@@ -1,215 +1,257 @@
-import React, { useState, useCallback, useEffect } from 'react';
+// src/screens/orders/OrdersScreen.jsx
+// Retailer Orders — structural parity with wholesalerapp/src/screens/order/OrderListScreen.jsx.
+//
+// Layout matches the wholesaler exactly:
+//   - "Create Order" button pinned at the top
+//   - horizontally scrollable status pills, each with a live count badge
+//   - a short 3-row card: order code + status chip / customer / amount + date
+//   - pull-to-refresh, empty state per tab
+//
+// ONE DELIBERATE DIFFERENCE — the status vocabulary.
+// The wholesaler's 7 tabs are New, Accepted, Processing, Ready, Dispatched,
+// Delivered, Cancelled. The retailer's backend does NOT speak that vocabulary:
+// `retailerMarketplaceController.ANDROID_STATUS` normalises every order into a
+// 6-stage set — New, Accepted, Packing, Dispatched, Out for Delivery, Delivered,
+// Cancelled — and `listOrders` filters SERVER-SIDE through STATUS_GROUPS. Asking
+// for `status=Processing` or `status=Ready` therefore returns zero rows, so
+// those tabs would be permanently empty and `Packing` / `Out for Delivery`
+// orders would be unreachable. The retailer's tabs are its real statuses, in the
+// wholesaler's pill-with-count layout. See SKILL.md → "Orders screen".
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  StatusBar, RefreshControl, ActivityIndicator, TextInput,
+  StatusBar, RefreshControl, ActivityIndicator,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { Colors } from '../../theme/colors';
 import { Typography } from '../../theme/typography';
-import { Spacing, BorderRadius } from '../../theme/spacing';
-import OrderCard from '../../components/order/OrderCard';
+import { Shadows } from '../../theme/spacing';
 import EmptyState from '../../components/common/EmptyState';
-import { orderApi, notificationApi } from '../../utils/api';
+import { orderApi } from '../../utils/api';
+import { formatDate, formatCurrency } from '../../utils/formatters';
 import { SCREENS } from '../../constants';
 
-const TABS = ['All', 'New', 'Accepted', 'Packing', 'Dispatched', 'Out for Delivery', 'Delivered', 'Cancelled'];
+// The retailer's real statuses, in lifecycle order.
+const TABS = ['New', 'Accepted', 'Packing', 'Dispatched', 'Out for Delivery', 'Delivered', 'Cancelled'];
+// Compact labels so all seven pills fit without truncation.
 const TAB_LABELS = { 'Out for Delivery': 'On Way' };
 
+// Mirrors the wholesaler's STATUS_META palette, keyed by the retailer's statuses.
+const STATUS_META = {
+  New:                { bg: '#EFF6FF', text: '#2563EB', icon: 'add-circle-outline' },
+  Accepted:           { bg: '#F5F3FF', text: '#7C3AED', icon: 'checkmark-circle-outline' },
+  Packing:            { bg: '#FFF7ED', text: '#D97706', icon: 'cube-outline' },
+  Dispatched:         { bg: '#EFF6FF', text: '#0369A1', icon: 'car-outline' },
+  'Out for Delivery': { bg: '#ECFEFF', text: '#0891B2', icon: 'navigate-outline' },
+  Delivered:          { bg: '#F0FDF4', text: '#059669', icon: 'checkmark-done' },
+  Cancelled:          { bg: '#FEF2F2', text: '#DC2626', icon: 'close-circle-outline' },
+};
+
+// Map the backend order DTO onto the flat card fields.
+// NOTE field names differ from the wholesaler's: the retailer's DTO nests the
+// buyer under `customer.name` and the amount under `total_amount`.
 function mapOrder(o) {
   return {
     id: o.id,
     orderCode: o.order_code,
-    productName: o.product?.name || o.product_name || '',
-    productCode: o.product?.code || '',
-    quantity: o.qty,
-    dispatchedQty: o.dispatched_qty ?? o.qty_dispatched ?? 0,
-    unit: o.unit,
-    unitPrice: o.unit_price,
-    subtotal: o.amount,
-    gst: o.gst_amount,
-    gstPercent: o.gst_percent,
-    deliveryCharges: (o.charges?.transport || 0) + (o.charges?.packing || 0) + (o.charges?.other || 0),
-    total: o.total_amount,
     status: o.status,
-    internalStatus: o.internal_status,
-    paymentStatus: o.payment_status || null,
-    invoiceNumber: o.invoice_number || '',
-    expectedDelivery: o.expected_delivery || null,
-    deliveryAddress: o.delivery_address || '',
-    seller: o.seller ? { name: o.seller.name, location: [o.seller.city, o.seller.state].filter(Boolean).join(', ') } : null,
-    enquiryCode: o.enquiry_code || '',
+    customerName: o.customer?.name || o.created_by?.company || '—',
+    total: o.total_amount,
     createdAt: o.created_at,
-    orderDate: o.created_at,
-    statusHistory: o.status_history || [],
-    _raw: o,
   };
 }
 
 export default function OrdersScreen({ navigation }) {
-  const [activeTab, setActiveTab]   = useState('All');
-  const [orders, setOrders]         = useState([]);
-  const [search, setSearch]         = useState('');
-  const [loading, setLoading]       = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError]           = useState('');
-  const [unread, setUnread]         = useState(0);
+  const insets = useSafeAreaInsets();
+  const [tabIdx, setTabIdx]   = useState(0);
+  const [orders, setOrders]   = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState('');
 
-  const load = useCallback(async (tab = 'All') => {
+  // Load ALL orders once; the pills then filter client-side exactly like the
+  // wholesaler's screen does. This also keeps every count badge accurate.
+  const load = useCallback(async () => {
     setError('');
     try {
-      const params = tab !== 'All' ? { status: tab, limit: 100 } : { limit: 100 };
-      const data = await orderApi.list(params);
+      const data = await orderApi.list({ limit: 100 });
       setOrders((data?.orders || []).map(mapOrder));
     } catch (err) {
       setError(err.message || 'Could not load orders.');
     }
   }, []);
 
-  const loadUnread = useCallback(async () => {
-    try {
-      const data = await notificationApi.list({ unread: 'true', limit: 1 });
-      setUnread(data?.unread_count || 0);
-    } catch { /* silent */ }
-  }, []);
-
   useEffect(() => {
-    (async () => { setLoading(true); await Promise.all([load(activeTab), loadUnread()]); setLoading(false); })();
-  }, [load, loadUnread, activeTab]);
+    (async () => { setLoading(true); await load(); setLoading(false); })();
+  }, [load]);
 
-  const onRefresh = async () => { setRefreshing(true); await Promise.all([load(activeTab), loadUnread()]); setRefreshing(false); };
-  const onTabChange = (tab) => { setActiveTab(tab); setLoading(true); load(tab).then(() => setLoading(false)); };
+  const onRefresh = async () => { setLoading(true); await load(); setLoading(false); };
 
-  // Client-side search over order code / product / enquiry code.
-  const q = search.trim().toLowerCase();
-  const visibleOrders = q
-    ? orders.filter(o =>
-        (o.orderCode || '').toLowerCase().includes(q) ||
-        (o.productName || '').toLowerCase().includes(q) ||
-        (o.enquiryCode || '').toLowerCase().includes(q))
-    : orders;
+  const activeStatus = TABS[tabIdx];
+  const filtered     = orders.filter(o => o.status === activeStatus);
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <View style={styles.screen}>
       <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          {navigation.canGoBack() && (
-            <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-              <Ionicons name="arrow-back" size={22} color="#FFF" />
-            </TouchableOpacity>
-          )}
-          <Ionicons name="cube-outline" size={20} color="#FFF" style={styles.headerIcon} />
-          <Text style={styles.headerTitle}>My Orders</Text>
-        </View>
-        <View style={styles.headerRight}>
-          <Text style={styles.headerCount}>{orders.length} total</Text>
-          <TouchableOpacity style={styles.notifBtn} onPress={() => navigation.navigate(SCREENS.NOTIFICATIONS)}>
-            <Ionicons name="notifications-outline" size={22} color="#FFF" />
-            {unread > 0 && <View style={styles.badge}><Text style={styles.badgeText}>{unread > 9 ? '9+' : unread}</Text></View>}
-          </TouchableOpacity>
-        </View>
-      </View>
 
-      {/* Search */}
-      <View style={styles.searchWrap}>
-        <View style={styles.searchBar}>
-          <Ionicons name="search-outline" size={18} color={Colors.textTertiary} />
-          <TextInput
-            style={styles.searchInput}
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Search order, product, enquiry…"
-            placeholderTextColor={Colors.textTertiary}
-            returnKeyType="search"
-          />
-          {search.length > 0 && (
-            <TouchableOpacity onPress={() => setSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Ionicons name="close-circle" size={18} color={Colors.textTertiary} />
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
+      {/* Create Order — the wholesaler's OrderEntry equivalent is the retailer's
+          Sales Entry ("New Sale" on the dashboard). The retailer has no separate
+          order-entry screen: marketplace orders are created from an accepted
+          quotation (QuotationConfirmScreen → OrderSuccess), so this button opens
+          the manual sale entry instead. */}
+      <TouchableOpacity
+        style={[styles.createBtn, { marginTop: insets.top + 12 }]}
+        onPress={() => navigation.navigate(SCREENS.SALES_ENTRY)}
+        activeOpacity={0.85}
+      >
+        <Ionicons name="add" size={18} color="#FFF" />
+        <Text style={styles.createBtnText}>Create Order</Text>
+      </TouchableOpacity>
 
-      {/* Tabs */}
-      <View style={styles.tabsWrapper}>
+      {/* Status pills with count badges */}
+      <View style={styles.tabBarWrap}>
         <FlatList
-          data={TABS}
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.tabs}
+          data={TABS}
           keyExtractor={t => t}
-          renderItem={({ item }) => {
-            const active = activeTab === item;
+          contentContainerStyle={styles.tabList}
+          renderItem={({ item: tab, index }) => {
+            const active = index === tabIdx;
+            const count  = orders.filter(o => o.status === tab).length;
             return (
-              <TouchableOpacity style={[styles.tab, active && styles.tabActive]} onPress={() => onTabChange(item)}>
-                <Text style={[styles.tabText, active && styles.tabTextActive]}>{TAB_LABELS[item] || item}</Text>
+              <TouchableOpacity
+                style={[styles.tab, active && styles.tabActive]}
+                onPress={() => setTabIdx(index)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.tabText, active && styles.tabTextActive]}>
+                  {TAB_LABELS[tab] || tab}
+                </Text>
+                {count > 0 && (
+                  <View style={[styles.tabBadge, active && styles.tabBadgeActive]}>
+                    <Text style={[styles.tabBadgeText, active && styles.tabBadgeTextActive]}>{count}</Text>
+                  </View>
+                )}
               </TouchableOpacity>
             );
           }}
         />
       </View>
 
-      {loading ? (
-        <View style={styles.center}><ActivityIndicator color={Colors.primary} /><Text style={styles.loadingText}>Loading orders…</Text></View>
+      {loading && orders.length === 0 ? (
+        <View style={styles.center}>
+          <ActivityIndicator color={Colors.primary} />
+          <Text style={styles.loadingText}>Loading orders…</Text>
+        </View>
       ) : error ? (
         <View style={styles.center}>
           <Ionicons name="cloud-offline-outline" size={40} color={Colors.textTertiary} />
           <Text style={styles.errorText}>{error}</Text>
           <TouchableOpacity onPress={onRefresh}><Text style={styles.retryText}>Tap to retry</Text></TouchableOpacity>
         </View>
-      ) : visibleOrders.length === 0 ? (
-        <EmptyState
-          iconName="cube-outline"
-          title={q ? 'No matches' : 'No Orders'}
-          message={q
-            ? `No orders match “${search.trim()}”.`
-            : `You have no ${activeTab !== 'All' ? (TAB_LABELS[activeTab] || activeTab).toLowerCase() + ' ' : ''}orders yet.`}
-          buttonTitle={q ? undefined : 'EXPLORE PRODUCTS'}
-          onButtonPress={q ? undefined : () => navigation.navigate(SCREENS.SEARCH)}
-        />
       ) : (
         <FlatList
-          data={visibleOrders}
-          keyExtractor={i => i.id}
+          data={filtered}
+          keyExtractor={i => String(i.id)}
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.primary]} />}
-          renderItem={({ item }) => (
-            <OrderCard
-              order={item}
-              onPress={() => navigation.navigate(SCREENS.ORDER_DETAILS, { orderId: item.id })}
-              onTrack={() => navigation.navigate(SCREENS.ORDER_TRACKING, { orderId: item.id })}
+          refreshControl={<RefreshControl refreshing={false} onRefresh={onRefresh} colors={[Colors.primary]} />}
+          renderItem={({ item }) => {
+            const meta = STATUS_META[item.status] || STATUS_META.New;
+            return (
+              <TouchableOpacity
+                style={styles.card}
+                onPress={() => navigation.navigate(SCREENS.ORDER_DETAILS, { orderId: item.id })}
+                activeOpacity={0.78}
+              >
+                {/* Top: order code + status */}
+                <View style={styles.cardTop}>
+                  <View style={styles.orderCodeWrap}>
+                    <Ionicons name="receipt-outline" size={14} color={Colors.primary} />
+                    <Text style={styles.orderCode}>
+                      {item.orderCode || 'ORD-' + String(item.id || '').slice(-6)}
+                    </Text>
+                  </View>
+                  <View style={[styles.chip, { backgroundColor: meta.bg }]}>
+                    <Ionicons name={meta.icon} size={11} color={meta.text} />
+                    <Text style={[styles.chipText, { color: meta.text }]}>
+                      {TAB_LABELS[item.status] || item.status}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Customer */}
+                <View style={styles.customerRow}>
+                  <Ionicons name="storefront-outline" size={13} color={Colors.textSecondary} />
+                  <Text style={styles.customerName} numberOfLines={1}>{item.customerName}</Text>
+                </View>
+
+                {/* Footer: amount + date */}
+                <View style={styles.cardFooter}>
+                  <Text style={styles.amount}>{formatCurrency(item.total || 0)}</Text>
+                  <View style={styles.dateRow}>
+                    <Ionicons name="calendar-outline" size={12} color={Colors.textDisabled} />
+                    <Text style={styles.dateText}>{formatDate(item.createdAt)}</Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            );
+          }}
+          ListEmptyComponent={
+            <EmptyState
+              iconName="cube-outline"
+              title={`No ${TAB_LABELS[activeStatus] || activeStatus} orders`}
             />
-          )}
+          }
         />
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.background },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: Spacing.screenPadding, paddingVertical: Spacing.base, backgroundColor: Colors.secondary },
-  headerLeft: { flexDirection: 'row', alignItems: 'center' },
-  backBtn: { marginRight: 8 },
-  headerIcon: { marginRight: 8 },
-  headerTitle: { ...Typography.h4, color: '#FFF' },
-  headerCount: { ...Typography.caption, color: 'rgba(255,255,255,0.6)' },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  notifBtn: { position: 'relative', padding: 4 },
-  badge: { position: 'absolute', top: 0, right: 0, backgroundColor: Colors.primary, borderRadius: 8, minWidth: 16, height: 16, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3, borderWidth: 1.5, borderColor: Colors.secondary },
-  badgeText: { color: Colors.white, fontSize: 9, fontWeight: '800' },
-  searchWrap: { backgroundColor: Colors.white, paddingHorizontal: Spacing.screenPadding, paddingTop: 10 },
-  searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Colors.background, borderRadius: BorderRadius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 12, height: 42 },
-  searchInput: { flex: 1, ...Typography.body2, color: Colors.textPrimary, paddingVertical: 0 },
-  tabsWrapper: { backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
-  tabs: { paddingHorizontal: Spacing.screenPadding, paddingVertical: 10, gap: 6 },
-  tab: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: BorderRadius.chip, borderWidth: 1.5, borderColor: Colors.border, backgroundColor: Colors.white },
-  tabActive: { borderColor: Colors.secondary, backgroundColor: Colors.secondary },
-  tabText: { ...Typography.caption, color: Colors.textSecondary, fontWeight: '500' },
-  tabTextActive: { color: Colors.white, fontWeight: '700' },
-  list: { padding: Spacing.screenPadding, paddingBottom: 90 },
+  screen: { flex: 1, backgroundColor: '#F4F6FA' },
+
+  createBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    backgroundColor: Colors.secondary, marginHorizontal: 12, marginBottom: 0,
+    borderRadius: 12, paddingVertical: 13,
+  },
+  createBtnText: { color: '#FFF', fontSize: 14, fontWeight: '800' },
+
+  tabBarWrap: { backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: Colors.border, marginTop: 12 },
+  tabList: { paddingHorizontal: 12, paddingVertical: 10, gap: 8, flexDirection: 'row' },
+  tab: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, backgroundColor: '#F4F6FA' },
+  tabActive:          { backgroundColor: Colors.secondary },
+  tabText:            { ...Typography.caption, fontSize: 12, fontWeight: '600', color: Colors.textSecondary },
+  tabTextActive:      { color: '#FFF' },
+  tabBadge:           { backgroundColor: Colors.border, borderRadius: 8, minWidth: 18, paddingHorizontal: 4, alignItems: 'center' },
+  tabBadgeActive:     { backgroundColor: 'rgba(255,255,255,0.3)' },
+  tabBadgeText:       { fontSize: 9, fontWeight: '800', color: Colors.textSecondary },
+  tabBadgeTextActive: { color: '#FFF' },
+
+  list: { padding: 12, paddingBottom: 32 },
+
+  card: {
+    backgroundColor: '#FFF', borderRadius: 14, marginBottom: 10,
+    padding: 14, borderWidth: 1, borderColor: Colors.border,
+    gap: 8, ...Shadows.sm,
+  },
+  cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  orderCodeWrap: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  orderCode: { fontSize: 14, fontWeight: '800', color: Colors.primary },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 10 },
+  chipText: { fontSize: 11, fontWeight: '700' },
+
+  customerRow:  { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  customerName: { fontSize: 14, fontWeight: '600', color: Colors.textPrimary, flex: 1 },
+
+  cardFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: 8 },
+  amount:   { fontSize: 15, fontWeight: '800', color: Colors.textPrimary },
+  dateRow:  { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  dateText: { fontSize: 12, color: Colors.textDisabled },
+
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24 },
   loadingText: { ...Typography.body2, color: Colors.textSecondary },
   errorText: { ...Typography.body2, color: Colors.textSecondary, textAlign: 'center' },
