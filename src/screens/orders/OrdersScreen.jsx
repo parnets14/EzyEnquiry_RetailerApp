@@ -50,13 +50,20 @@ const STATUS_META = {
 
 // Map the backend order DTO onto the flat card fields.
 // NOTE field names differ from the wholesaler's: the retailer's DTO nests the
-// buyer under `customer.name` and the amount under `total_amount`.
+// amount under `total_amount`, and the counterparty under `seller`.
+//
+// The wholesaler's middle row shows the CUSTOMER — it is the seller there.
+// The retailer is the BUYER, and `createOrder` sets `customer_name` to the
+// retailer's OWN company name (retailerMarketplaceController line ~1321), so
+// rendering `customer.name` would print the retailer to itself. The meaningful
+// counterparty for a buyer-side order is the seller, so that row shows the
+// seller, with the customer name as a fallback for legacy/edge records.
 function mapOrder(o) {
   return {
     id: o.id,
     orderCode: o.order_code,
     status: o.status,
-    customerName: o.customer?.name || o.created_by?.company || '—',
+    partyName: o.seller?.name || o.customer?.name || o.created_by?.company || '—',
     total: o.total_amount,
     createdAt: o.created_at,
   };
@@ -156,7 +163,7 @@ export default function OrdersScreen({ navigation }) {
           keyExtractor={i => String(i.id)}
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={false} onRefresh={onRefresh} colors={[Colors.primary]} />}
+          refreshControl={<RefreshControl refreshing={loading} onRefresh={onRefresh} colors={[Colors.primary]} />}
           renderItem={({ item }) => {
             const meta = STATUS_META[item.status] || STATUS_META.New;
             return (
@@ -181,10 +188,10 @@ export default function OrdersScreen({ navigation }) {
                   </View>
                 </View>
 
-                {/* Customer */}
+                {/* Counterparty — the seller this order was placed with */}
                 <View style={styles.customerRow}>
                   <Ionicons name="storefront-outline" size={13} color={Colors.textSecondary} />
-                  <Text style={styles.customerName} numberOfLines={1}>{item.customerName}</Text>
+                  <Text style={styles.customerName} numberOfLines={1}>{item.partyName}</Text>
                 </View>
 
                 {/* Footer: amount + date */}

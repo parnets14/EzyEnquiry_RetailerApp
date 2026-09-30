@@ -1,276 +1,415 @@
-import React, { useState, useCallback, useEffect } from 'react';
+/**
+ * src/screens/enquiries/EnquiriesScreen.jsx  (Retailer app)
+ *
+ * Structural parity with the wholesaler's `enquiry/EnquiryListScreen.jsx`:
+ *
+ *   [ navy navbar: "Enquiries" · "N total · M new" · unread pill · search · refresh ]
+ *   [ inline search bar (toggled by the search icon)                              ]
+ *   [ status pills: All · New · Viewed · Replied · Negotiation · Confirmed · Cancelled
+ *                   each with a live count badge                                 ]
+ *   [ cards: orange strip when New · code + status chip · party · product ·
+ *            qty / price / location · date + chevron                              ]
+ *
+ * ── Changes from the previous version ───────────────────────────────────────
+ * The old screen had 5 relabelled tabs (All / New / In Progress / Accepted /
+ * Rejected) with NO counts, an always-visible search bar, a notifications bell,
+ * and delegated cards to `<EnquiryCard>`. The wholesaler has 7 raw-status tabs
+ * WITH counts, a toggled search bar, and renders its cards inline — so this now
+ * matches. Confirmed/Cancelled are no longer relabelled to Accepted/Rejected,
+ * matching the wholesaler's vocabulary.
+ *
+ * The notifications bell is gone (the wholesaler has none). Notifications stay
+ * reachable from Home and from the Quotations screen.
+ *
+ * ── Field mapping (the DTOs differ) ─────────────────────────────────────────
+ * The wholesaler reads flat fields (`enq_code`, `retailer_name`, `product_name`,
+ * `offered_price`) because its backend returns them flat. The retailer's
+ * `enquiryResponse` returns `enquiry_code`, `product{}`, `customer{}`,
+ * `seller{}` and `accepted_offer_price`. Same slots, mapped to the real fields.
+ *
+ * The party line: the wholesaler shows the RETAILER who enquired — its
+ * counterparty. The retailer is the buyer here, and its own company name is what
+ * `created_by.company` holds, so that would print the retailer to itself. The
+ * meaningful party is the end-customer this enquiry is for, falling back to the
+ * seller. Same slot, correct party — the same rule used on the Orders screen.
+ *
+ * ── Logic parity ────────────────────────────────────────────────────────────
+ * State now comes from `hooks/useEnquiries` — the mirrored twin of the
+ * wholesaler's hook — instead of an inline loader. That is what the wholesaler's
+ * list screen does (`const { enquiries, loading, error, refetch, unreadCount } =
+ * useEnquiries();`), and it keeps the "load ALL, filter client-side, count per
+ * tab" rule in one place. `newCount` is that hook's `unreadCount` (i.e. how many
+ * are status `New`), NOT the notification counter.
+ */
+import React, { useCallback, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   StatusBar, RefreshControl, ActivityIndicator, TextInput,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { Colors } from '../../theme/colors';
 import { Typography } from '../../theme/typography';
-import { Spacing, BorderRadius } from '../../theme/spacing';
-import EnquiryCard from '../../components/enquiry/EnquiryCard';
+import { Spacing, BorderRadius, Shadows } from '../../theme/spacing';
 import EmptyState from '../../components/common/EmptyState';
-import { enquiryApi, notificationApi } from '../../utils/api';
+import useEnquiries from '../../hooks/useEnquiries';
+import { formatDate, formatCurrency } from '../../utils/formatters';
 import { SCREENS } from '../../constants';
 
-const TABS = ['All', 'New', 'In Progress', 'Accepted', 'Rejected'];
+// The backend's raw status vocabulary, in lifecycle order — same 7 tabs as the
+// wholesaler. Confirmed/Cancelled are shown as-is, not relabelled.
+const STATUS_TABS = ['All', 'New', 'Viewed', 'Replied', 'Negotiation', 'Confirmed', 'Cancelled'];
 
-// App tab → one or more backend enquiry statuses.
-// 'In Progress' covers the mid-stage statuses: Viewed, Replied, Negotiation.
-const TAB_TO_STATUS = {
-  New:         'New',
-  'In Progress': null,   // handled separately — multi-status filter
-  Accepted:    'Confirmed',
-  Rejected:    'Cancelled',
+// Same palette as the wholesaler's STATUS_META.
+const STATUS_META = {
+  New:         { bg: '#EFF6FF', text: '#2563EB', dot: '#3B82F6' },
+  Viewed:      { bg: '#F3F4F6', text: '#6B7280', dot: '#9CA3AF' },
+  Replied:     { bg: '#FFF7ED', text: '#D97706', dot: '#F59E0B' },
+  Negotiation: { bg: '#F5F3FF', text: '#7C3AED', dot: '#8B5CF6' },
+  Confirmed:   { bg: '#F0FDF4', text: '#059669', dot: '#10B981' },
+  Cancelled:   { bg: '#FEF2F2', text: '#DC2626', dot: '#F87171' },
 };
-const IN_PROGRESS_STATUSES = ['Viewed', 'Replied', 'Negotiation'];
-
-// Backend status → human-readable label shown to the retailer.
-const STATUS_LABEL = {
-  New:         'New',
-  Viewed:      'Viewed',
-  Replied:     'Replied',
-  Negotiation: 'Negotiation',
-  Confirmed:   'Accepted',
-  Cancelled:   'Rejected',
-};
-const toLabel = (s) => STATUS_LABEL[s] || s || 'New';
-
-// Map backend enquiry response → shape EnquiryCard expects
-function mapEnquiry(e) {
-  return {
-    id:              e.id,
-    enquiryId:       e.enquiry_code || e.id,
-    productName:     e.product?.name || e.product_name || '',
-    productCode:     e.product?.code || e.product_code || '',
-    quantity:        e.qty,
-    unit:            e.unit,
-    deliveryLocation: e.location || '',
-    remarks:         e.remarks || '',
-    status:          toLabel(e.status),
-    rawStatus:       e.status,
-    sellerReply:     e.seller_reply || '',
-    seller:          e.seller ? { name: e.seller.name, location: [e.seller.city, e.seller.state].filter(Boolean).join(', ') } : null,
-    createdAt:       e.created_at,
-    updatedAt:       e.updated_at,
-    orderId:         e.order_id,
-    // raw for detail screen
-    _raw: e,
-  };
-}
 
 export default function EnquiriesScreen({ navigation }) {
-  const [activeTab, setActiveTab]     = useState('All');
-  const [enquiries, setEnquiries]     = useState([]);
-  const [search, setSearch]           = useState('');
-  const [loading, setLoading]         = useState(true);
-  const [refreshing, setRefreshing]   = useState(false);
-  const [error, setError]             = useState('');
-  const [unread, setUnread]           = useState(0);
+  const [tabIdx, setTabIdx]         = useState(0);
+  const [search, setSearch]         = useState('');
+  const [showSearch, setShowSearch] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const loadUnread = useCallback(async () => {
-    try {
-      const data = await notificationApi.list({ unread: 'true', limit: 1 });
-      setUnread(data?.unread_count || 0);
-    } catch { /* silent */ }
-  }, []);
+  // Same hook the wholesaler uses. It loads ALL enquiries once (limit 100) and
+  // exposes the "new" count — that is what keeps every tab badge accurate.
+  // We keep a focus reload on top so returning from a detail screen (where the
+  // status may have moved New → Viewed) refreshes the list.
+  const { enquiries, loading, error, refetch, unreadCount } = useEnquiries();
 
-  const load = useCallback(async (tab = 'All') => {
-    setError('');
-    try {
-      let params = { limit: 100 };
-      if (tab === 'In Progress') {
-        // Send multiple status values; backend filters with $in when array passed
-        params.status = IN_PROGRESS_STATUSES.join(',');
-      } else {
-        const backendStatus = TAB_TO_STATUS[tab];
-        if (backendStatus) params.status = backendStatus;
-      }
-      const data = await enquiryApi.list(params);
-      let list = data?.enquiries || [];
-      // Client-side filter for 'In Progress' if backend doesn't support comma-separated status
-      if (tab === 'In Progress') {
-        list = list.filter(e => IN_PROGRESS_STATUSES.includes(e.status));
-      }
-      setEnquiries(list.map(mapEnquiry));
-    } catch (err) {
-      setError(err.message || 'Could not load enquiries.');
-    }
-  }, []);
+  useFocusEffect(useCallback(() => { refetch(); }, [refetch]));
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      await Promise.all([load(activeTab), loadUnread()]);
-      setLoading(false);
-    })();
-  }, [load, loadUnread, activeTab]);
-
-  // Re-fetch whenever the screen regains focus, so deleted/updated enquiries
-  // reflect immediately instead of showing a stale cached list.
-  useFocusEffect(
-    useCallback(() => {
-      load(activeTab);
-      loadUnread();
-    }, [load, loadUnread, activeTab]),
-  );
-
-  const onRefresh = async () => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([load(activeTab), loadUnread()]);
+    await refetch();
     setRefreshing(false);
-  };
+  }, [refetch]);
 
-  const onTabChange = (tab) => {
-    setActiveTab(tab);
-    setLoading(true);
-    load(tab).then(() => setLoading(false));
-  };
+  const list         = Array.isArray(enquiries) ? enquiries : [];
+  const activeStatus = STATUS_TABS[tabIdx];
+  const newCount     = unreadCount;
 
-  // Client-side search over enquiry code / product name.
   const q = search.trim().toLowerCase();
-  const visibleEnquiries = q
-    ? enquiries.filter(e =>
-        (e.enquiryId || '').toLowerCase().includes(q) ||
-        (e.productName || '').toLowerCase().includes(q) ||
-        (e.productCode || '').toLowerCase().includes(q))
-    : enquiries;
+  const filtered = list.filter(e => {
+    const matchTab = activeStatus === 'All' || e.status === activeStatus;
+    const matchSearch = !q
+      || (e.enquiry_code || '').toLowerCase().includes(q)
+      || (e.customer?.name || '').toLowerCase().includes(q)
+      || (e.product?.name || '').toLowerCase().includes(q)
+      || (e.product?.code || '').toLowerCase().includes(q);
+    return matchTab && matchSearch;
+  });
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
+      <StatusBar barStyle="light-content" backgroundColor={Colors.secondary} />
 
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          {navigation.canGoBack() && (
-            <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-              <Ionicons name="arrow-back" size={22} color="#FFF" />
-            </TouchableOpacity>
+      {/* ══ Navbar ══ */}
+      <View style={styles.navbar}>
+        <View style={styles.navCircle1} />
+        <View style={styles.navCircle2} />
+
+        <View style={styles.navRow}>
+          <View style={styles.navTitleWrap}>
+            <Text style={styles.navTitle}>Enquiries</Text>
+            <Text style={styles.navSub}>
+              {list.length} total{newCount > 0 ? `  ·  ${newCount} new` : ''}
+            </Text>
+          </View>
+
+          {newCount > 0 && (
+            <View style={styles.unreadBadge}>
+              <Text style={styles.unreadBadgeText}>
+                {newCount > 99 ? '99+' : newCount} New
+              </Text>
+            </View>
           )}
-          <Ionicons name="document-text-outline" size={20} color="#FFF" style={styles.headerIcon} />
-          <Text style={styles.headerTitle}>My Quotations</Text>
-        </View>
-        <View style={styles.headerRight}>
-          <Text style={styles.headerCount}>{enquiries.length} total</Text>
-          <TouchableOpacity style={styles.notifBtn} onPress={() => navigation.navigate(SCREENS.NOTIFICATIONS)}>
-            <Ionicons name="notifications-outline" size={22} color="#FFF" />
-            {unread > 0 && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{unread > 9 ? '9+' : unread}</Text>
-              </View>
-            )}
+
+          <TouchableOpacity
+            style={styles.navIconBtn}
+            onPress={() => { setShowSearch(v => !v); setSearch(''); }}
+            activeOpacity={0.8}
+          >
+            <Ionicons name={showSearch ? 'close' : 'search-outline'} size={20} color="#FFF" />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.navIconBtn} onPress={refetch} activeOpacity={0.8}>
+            <Ionicons name="refresh-outline" size={20} color="#FFF" />
           </TouchableOpacity>
         </View>
+
+        {showSearch && (
+          <View style={styles.searchBar}>
+            <Ionicons name="search-outline" size={17} color={Colors.textTertiary} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search by name, product, code…"
+              placeholderTextColor={Colors.textTertiary}
+              value={search}
+              onChangeText={setSearch}
+              autoFocus
+              returnKeyType="search"
+            />
+            {search.length > 0 && (
+              <TouchableOpacity onPress={() => setSearch('')}>
+                <Ionicons name="close-circle" size={16} color={Colors.textTertiary} />
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
       </View>
 
-      {/* Search */}
-      <View style={styles.searchWrap}>
-        <View style={styles.searchBar}>
-          <Ionicons name="search-outline" size={18} color={Colors.textTertiary} />
-          <TextInput
-            style={styles.searchInput}
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Search quotation code or product…"
-            placeholderTextColor={Colors.textTertiary}
-            returnKeyType="search"
-          />
-          {search.length > 0 && (
-            <TouchableOpacity onPress={() => setSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Ionicons name="close-circle" size={18} color={Colors.textTertiary} />
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
-
-      {/* Tabs */}
-      <View style={styles.tabsWrapper}>
+      {/* ══ Status tabs ══ */}
+      <View style={styles.tabBarWrap}>
         <FlatList
-          data={TABS}
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.tabs}
+          data={STATUS_TABS}
           keyExtractor={t => t}
-          renderItem={({ item }) => {
-            const active = activeTab === item;
+          contentContainerStyle={styles.tabList}
+          renderItem={({ item: tab, index }) => {
+            const active = index === tabIdx;
+            const count = tab === 'All'
+              ? list.length
+              : list.filter(e => e.status === tab).length;
             return (
               <TouchableOpacity
                 style={[styles.tab, active && styles.tabActive]}
-                onPress={() => onTabChange(item)}
+                onPress={() => setTabIdx(index)}
+                activeOpacity={0.8}
               >
-                <Text style={[styles.tabText, active && styles.tabTextActive]}>{item}</Text>
+                <Text style={[styles.tabText, active && styles.tabTextActive]}>{tab}</Text>
+                {count > 0 && (
+                  <View style={[styles.tabBadge, active && styles.tabBadgeActive]}>
+                    <Text style={[styles.tabBadgeText, active && styles.tabBadgeTextActive]}>
+                      {count > 99 ? '99+' : count}
+                    </Text>
+                  </View>
+                )}
               </TouchableOpacity>
             );
           }}
         />
       </View>
 
-      {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={Colors.primary} />
-          <Text style={styles.loadingText}>Loading enquiries…</Text>
-        </View>
+      {/* ══ List ══ */}
+      {loading && list.length === 0 ? (
+        <View style={styles.center}><ActivityIndicator color={Colors.primary} /></View>
       ) : error ? (
         <View style={styles.center}>
           <Ionicons name="cloud-offline-outline" size={40} color={Colors.textTertiary} />
           <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity onPress={onRefresh}><Text style={styles.retryText}>Tap to retry</Text></TouchableOpacity>
+          <TouchableOpacity onPress={refetch}><Text style={styles.retryText}>Tap to retry</Text></TouchableOpacity>
         </View>
-      ) : visibleEnquiries.length === 0 ? (
-        <EmptyState
-          iconName="document-outline"
-          title={q ? 'No matches' : 'No Enquiries'}
-          message={q
-            ? `No enquiries match “${search.trim()}”.`
-            : `You have no ${activeTab !== 'All' ? activeTab.toLowerCase() + ' ' : ''}enquiries yet.`}
-          buttonTitle={q ? undefined : 'SEARCH PRODUCTS'}
-          onButtonPress={q ? undefined : () => navigation.navigate(SCREENS.SEARCH)}
-        />
       ) : (
         <FlatList
-          data={visibleEnquiries}
-          keyExtractor={i => i.id}
+          data={filtered}
+          keyExtractor={i => String(i.id)}
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.primary]} />}
-          renderItem={({ item }) => (
-            <EnquiryCard
-              enquiry={item}
-              onPress={() => navigation.navigate(SCREENS.ENQUIRY_DETAILS, { enquiryId: item.id })}
+          renderItem={({ item }) => <EnquiryCardRow item={item} navigation={navigation} />}
+          ListEmptyComponent={
+            <EmptyState
+              iconName="mail-open-outline"
+              title={`No ${activeStatus === 'All' ? '' : activeStatus + ' '}enquiries`}
+              message={q ? 'Try a different search term.' : 'Pull down to refresh.'}
             />
-          )}
+          }
         />
       )}
     </SafeAreaView>
   );
 }
 
+const EnquiryCardRow = ({ item, navigation }) => {
+  const meta  = STATUS_META[item.status] || STATUS_META.New;
+  const isNew = item.status === 'New';
+
+  // See the header note on the party line.
+  const partyName = item.customer?.name || item.seller?.name || '—';
+
+  return (
+    <TouchableOpacity
+      style={[styles.card, isNew && styles.cardNew]}
+      onPress={() => navigation.navigate(SCREENS.ENQUIRY_DETAILS, { enquiryId: item.id })}
+      activeOpacity={0.78}
+    >
+      {isNew && <View style={styles.newStrip} />}
+
+      <View style={styles.cardInner}>
+        {/* Code + status */}
+        <View style={styles.cardRow}>
+          <View style={styles.codeWrap}>
+            <Ionicons name="pricetag-outline" size={12} color={Colors.textTertiary} />
+            <Text style={styles.enqCode}>
+              {item.enquiry_code || `#${String(item.id || '').slice(-6)}`}
+            </Text>
+          </View>
+          <View style={[styles.chip, { backgroundColor: meta.bg }]}>
+            <View style={[styles.chipDot, { backgroundColor: meta.dot }]} />
+            <Text style={[styles.chipText, { color: meta.text }]}>{item.status}</Text>
+          </View>
+        </View>
+
+        {/* Party */}
+        <Text style={styles.partyName} numberOfLines={1}>{partyName}</Text>
+
+        {/* Product */}
+        <View style={styles.productRow}>
+          <Ionicons name="cube-outline" size={13} color={Colors.textSecondary} />
+          <Text style={styles.productText} numberOfLines={1}>
+            {item.product?.name || item.product?.code || '—'}
+          </Text>
+        </View>
+
+        {/* Qty · price · location */}
+        <View style={styles.metaRow}>
+          <View style={styles.metaItem}>
+            <Ionicons name="calculator-outline" size={12} color={Colors.textTertiary} />
+            <Text style={styles.metaText}>Qty: {item.qty || 0} {item.unit || ''}</Text>
+          </View>
+          {item.accepted_offer_price ? (
+            <View style={styles.metaItem}>
+              <Ionicons name="pricetag-outline" size={12} color={Colors.textTertiary} />
+              <Text style={styles.metaText}>{formatCurrency(item.accepted_offer_price)}</Text>
+            </View>
+          ) : null}
+          {item.location ? (
+            <View style={styles.metaItem}>
+              <Ionicons name="location-outline" size={12} color={Colors.textTertiary} />
+              <Text style={styles.metaText} numberOfLines={1}>{item.location}</Text>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Date + chevron */}
+        <View style={[styles.cardRow, styles.cardRowLast]}>
+          <View style={styles.metaItem}>
+            <Ionicons name="time-outline" size={11} color={Colors.textTertiary} />
+            <Text style={styles.dateText}>{formatDate(item.created_at)}</Text>
+          </View>
+          <View style={styles.arrowBtn}>
+            <Ionicons name="chevron-forward" size={16} color={Colors.primary} />
+          </View>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+};
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: Spacing.screenPadding, paddingVertical: Spacing.base, backgroundColor: Colors.secondary },
-  headerLeft: { flexDirection: 'row', alignItems: 'center' },
-  backBtn: { marginRight: 8 },
-  headerIcon: { marginRight: 8 },
-  headerTitle: { ...Typography.h4, color: '#FFF' },
-  headerCount: { ...Typography.caption, color: 'rgba(255,255,255,0.6)' },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  notifBtn: { position: 'relative', padding: 4 },
-  badge: { position: 'absolute', top: 0, right: 0, backgroundColor: Colors.primary, borderRadius: 8, minWidth: 16, height: 16, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3, borderWidth: 1.5, borderColor: Colors.secondary },
-  badgeText: { color: Colors.white, fontSize: 9, fontWeight: '800' },
-  searchWrap: { backgroundColor: Colors.white, paddingHorizontal: Spacing.screenPadding, paddingTop: 10 },
-  searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Colors.background, borderRadius: BorderRadius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 12, height: 42 },
+
+  /* ── Navbar ── */
+  navbar: {
+    backgroundColor: Colors.secondary,
+    paddingHorizontal: Spacing.base,
+    paddingTop: 12,
+    paddingBottom: 14,
+    overflow: 'hidden',
+  },
+  navCircle1: {
+    position: 'absolute', top: -30, right: -30,
+    width: 130, height: 130, borderRadius: 65,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+  },
+  navCircle2: {
+    position: 'absolute', bottom: -20, left: -20,
+    width: 90, height: 90, borderRadius: 45,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  navRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  navTitleWrap: { flex: 1 },
+  navTitle: { ...Typography.h4, fontWeight: '800', color: '#FFF', letterSpacing: 0.2 },
+  navSub: { ...Typography.caption, color: 'rgba(255,255,255,0.65)', marginTop: 1 },
+  unreadBadge: { backgroundColor: Colors.primary, borderRadius: 12, paddingHorizontal: 9, paddingVertical: 3 },
+  unreadBadgeText: { fontSize: 11, fontWeight: '800', color: '#FFF' },
+  navIconBtn: {
+    width: 36, height: 36, borderRadius: BorderRadius.button,
+    backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center',
+  },
+
+  searchBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: Colors.white, borderRadius: BorderRadius.button,
+    paddingHorizontal: 12, paddingVertical: 8, marginTop: 10,
+  },
   searchInput: { flex: 1, ...Typography.body2, color: Colors.textPrimary, paddingVertical: 0 },
-  tabsWrapper: { backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
-  tabs: { paddingHorizontal: Spacing.screenPadding, paddingVertical: 10, gap: 6 },
-  tab: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: BorderRadius.chip, borderWidth: 1.5, borderColor: Colors.border, backgroundColor: Colors.white },
-  tabActive: { borderColor: Colors.primary, backgroundColor: Colors.primary },
-  tabText: { ...Typography.caption, color: Colors.textSecondary, fontWeight: '500' },
-  tabTextActive: { color: Colors.white, fontWeight: '700' },
-  list: { padding: Spacing.screenPadding, paddingBottom: 90 },
+
+  /* ── Tabs ── */
+  tabBarWrap: {
+    backgroundColor: Colors.white,
+    borderBottomWidth: 1, borderBottomColor: Colors.border,
+    ...Shadows.sm,
+  },
+  tabList: { paddingHorizontal: 10, paddingVertical: 10, gap: 7, flexDirection: 'row' },
+  tab: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 13, paddingVertical: 6,
+    borderRadius: 20, backgroundColor: Colors.background,
+    borderWidth: 1, borderColor: 'transparent',
+  },
+  tabActive: { backgroundColor: Colors.secondary, borderColor: Colors.secondary },
+  tabText: { ...Typography.caption, fontWeight: '600', color: Colors.textSecondary },
+  tabTextActive: { color: '#FFF', fontWeight: '700' },
+  tabBadge: { backgroundColor: Colors.border, borderRadius: 8, minWidth: 18, paddingHorizontal: 4, alignItems: 'center' },
+  tabBadgeActive: { backgroundColor: 'rgba(255,255,255,0.25)' },
+  tabBadgeText: { fontSize: 9, fontWeight: '800', color: Colors.textSecondary },
+  tabBadgeTextActive: { color: '#FFF' },
+
+  /* ── Cards ── */
+  list: { padding: 12, paddingBottom: 32 },
+
+  card: {
+    backgroundColor: Colors.white,
+    borderRadius: 14,
+    marginBottom: 10,
+    flexDirection: 'row',
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: Colors.border,
+    ...Shadows.sm,
+  },
+  cardNew: { borderColor: Colors.primary },
+  newStrip: {
+    width: 4, backgroundColor: Colors.primary,
+    borderTopLeftRadius: 14, borderBottomLeftRadius: 14,
+  },
+  cardInner: { flex: 1, padding: 13 },
+
+  cardRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  cardRowLast: { marginTop: 4, marginBottom: 0 },
+  codeWrap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  enqCode: { fontSize: 11, fontWeight: '700', color: Colors.textTertiary, letterSpacing: 0.3 },
+
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 9, paddingVertical: 3, borderRadius: 10 },
+  chipDot: { width: 6, height: 6, borderRadius: 3 },
+  chipText: { fontSize: 11, fontWeight: '700' },
+
+  partyName: { fontSize: 15, fontWeight: '700', color: Colors.textPrimary, marginBottom: 5 },
+
+  productRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 6 },
+  productText: { ...Typography.caption, fontSize: 13, color: Colors.textSecondary, flex: 1 },
+
+  metaRow: { flexDirection: 'row', gap: 14, marginBottom: 2, flexWrap: 'wrap' },
+  metaItem: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  metaText: { fontSize: 12, color: Colors.textTertiary },
+
+  dateText: { fontSize: 11, color: Colors.textTertiary, marginLeft: 2 },
+
+  arrowBtn: {
+    width: 26, height: 26, borderRadius: BorderRadius.md,
+    backgroundColor: Colors.primaryBg, alignItems: 'center', justifyContent: 'center',
+  },
+
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24 },
-  loadingText: { ...Typography.body2, color: Colors.textSecondary },
   errorText: { ...Typography.body2, color: Colors.textSecondary, textAlign: 'center' },
   retryText: { ...Typography.body2, color: Colors.primary, fontWeight: '700' },
 });

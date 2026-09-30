@@ -88109,7 +88109,7 @@ __d(function (global, require, _$$_IMPORT_DEFAULT, _$$_IMPORT_ALL, module, expor
   // Set to your LAN IP during development with a real device.
   // Set to your production HTTPS URL for release builds.
   // Set to null to use the emulator defaults below.
-  var API_HOST_OVERRIDE = __DEV__ ? 'http://192.168.1.45:5000' // Developer LAN IP (change to yours)
+  var API_HOST_OVERRIDE = __DEV__ ? 'https://ezyenquiry-backend.onrender.com' // Developer LAN IP (change to yours)
   : null; // Production: configure below or use env injection
 
   // ─── Production host (used when override is null and not in __DEV__) ──────────

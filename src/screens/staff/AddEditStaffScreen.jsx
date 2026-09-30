@@ -8,7 +8,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { Colors } from '../../theme/colors';
 import { Shadows } from '../../theme/spacing';
-import { staffApi, myProductApi, productApi } from '../../utils/api';
+import { staffApi, myProductApi } from '../../utils/api';
 
 // ─── Retailer App modules ─────────────────────────────────────
 const RETAILER_MODULES = [
@@ -340,8 +340,9 @@ export default function AddEditStaffScreen({ navigation, route }) {
       : [],
   );
 
-  // Live current-month sales + earned incentive (edit mode only).
-  const [earned, setEarned] = useState(null);
+  // NOTE: the "This Month" earned-incentive card was deliberately removed from
+  // this screen (2026-09-30). Its `earned` state, fetch effect and styles are gone
+  // with it — keep it that way unless the card is intentionally restored.
 
   // Product discounts — includes mrp + retailPrice for display
   const [productDiscounts, setProductDiscounts] = useState(
@@ -364,36 +365,28 @@ export default function AddEditStaffScreen({ navigation, route }) {
   const [initialising, setInitialising] = useState(isEdit);
   const [errors,       setErrors]       = useState({});
 
-  // Load products — keep mrp + retailPrice for the discount cards
+  // Load products for the Discount Authorized Access picker.
+  //
+  // OWN PRODUCTS ONLY. This list is used to grant a staff member a discount on
+  // specific items, so it must mirror the wholesaler's reference behaviour
+  // (wholesalerapp AddStaffScreen → `wholesalerProductService.listMine`): a
+  // retailer can only authorise discounts on items it actually stocks.
+  //
+  // Previously this also merged in `productApi.search()` — the WHOLE marketplace
+  // catalogue — so the picker listed every product on the platform, including ones
+  // this company never added. Do not reintroduce that.
   useEffect(() => {
     setProductsLoading(true);
-    Promise.all([
-      productApi.search({ limit: 200 }),
-      myProductApi.list({ limit: 200 }),
-    ])
-      .then(([catalogData, myData]) => {
-        const catalogList = (catalogData?.products || []).map(p => ({
-          id:          String(p.id || p._id),
-          name:        p.name                            || '',
-          code:        p.productCode || p.code           || '',
-          mrp:         Number(p.prices?.mrp)             || Number(p.mrp)          || 0,
-          retailPrice: Number(p.prices?.retail_price)   || Number(p.retail_price)  || 0,
-        }));
-        const myList = (myData?.products || []).map(p => ({
-          id:          String(p.id || p._id),
+    myProductApi.list({ limit: 200 })
+      .then((myData) => {
+        const list = (myData?.products || []).map(p => ({
+          id:          String(p._id || p.id),
           name:        p.name          || '',
           code:        p.code          || '',
-          mrp:         Number(p.mrp)   || 0,
-          retailPrice: Number(p.retail_price) || Number(p.retailPrice) || 0,
+          mrp:         Number(p.prices?.mrp)            || Number(p.mrp)          || 0,
+          retailPrice: Number(p.prices?.retail_price)   || Number(p.retail_price)  || 0,
         }));
-        // Merge, dedupe by id
-        const seen   = new Set();
-        const merged = [...catalogList, ...myList].filter(p => {
-          if (seen.has(p.id)) return false;
-          seen.add(p.id);
-          return true;
-        });
-        setProducts(merged);
+        setProducts(list);
       })
       .catch(() => {})
       .finally(() => setProductsLoading(false));
@@ -442,16 +435,6 @@ export default function AddEditStaffScreen({ navigation, route }) {
       finally { if (!cancelled) setInitialising(false); }
     })();
     return () => { cancelled = true; };
-  }, [isEdit, editStaff?._id]);
-
-  // ── "This Month" earned incentive (edit mode only) ────────────────────────
-  useEffect(() => {
-    if (!isEdit || !editStaff?._id) return;
-    let alive = true;
-    staffApi.incentive(editStaff._id)
-      .then(res => { if (alive) setEarned(res?.data ?? res ?? null); })
-      .catch(() => { /* the card simply stays hidden */ });
-    return () => { alive = false; };
   }, [isEdit, editStaff?._id]);
 
   // ── Role access helpers ───────────────────────────────────────────────────
@@ -693,6 +676,11 @@ export default function AddEditStaffScreen({ navigation, route }) {
               </Field>
             </View>
 
+            {/* "This Month" earned card intentionally NOT shown here — the retailer
+                form omits it (user request 2026-09-30). Salary + Incentive Details
+                still capture the same settings; the live earned figure is not
+                surfaced on this screen. Do not re-add it. */}
+
             {/* ── 4. INCENTIVE DETAILS ── own card, like the wholesaler */}
             <SH icon="trending-up-outline" title="Incentive Details" color="#8E44AD" />
             <View style={st.card}>
@@ -761,39 +749,6 @@ export default function AddEditStaffScreen({ navigation, route }) {
                 onChange={setProductDiscounts}
               />
             </View>
-
-            {/* ── 3e. THIS MONTH EARNED (edit mode) ── */}
-            {earned && (
-              <>
-                <SH
-                  icon="wallet-outline"
-                  title={`This Month${earned.periodLabel ? ` · ${earned.periodLabel}` : ''}`}
-                  color={Colors.secondary}
-                />
-                <View style={st.earnedCard}>
-                  <View style={st.earnedItem}>
-                    <Text style={st.earnedLabel}>Sales</Text>
-                    <Text style={st.earnedValue}>{fmt(earned.monthSales)}</Text>
-                  </View>
-                  <View style={st.earnedDivider} />
-                  <View style={st.earnedItem}>
-                    <Text style={st.earnedLabel}>Rate</Text>
-                    <Text style={st.earnedValue}>{earned.pct || 0}%</Text>
-                  </View>
-                  <View style={st.earnedDivider} />
-                  <View style={st.earnedItem}>
-                    <Text style={st.earnedLabel}>Incentive</Text>
-                    <Text style={[st.earnedValue, { color: Colors.primary }]}>{fmt(earned.amount)}</Text>
-                  </View>
-                </View>
-                {!!earned.basisNote && (
-                  <Text style={[st.hint, { marginTop: -8, marginBottom: 12 }]}>
-                    {earned.basisNote}
-                    {earned.orderCount != null ? ` ${earned.orderCount} order${earned.orderCount === 1 ? '' : 's'} this month.` : ''}
-                  </Text>
-                )}
-              </>
-            )}
 
             <View style={{ height: 40 }} />
           </ScrollView>
@@ -909,13 +864,6 @@ const st = StyleSheet.create({
   addSlabTxt:    { fontSize: 13, fontWeight: '800', color: Colors.primary },
   slabExample:   { marginTop: 12, padding: 10, borderRadius: 10, backgroundColor: Colors.secondaryBg },
   slabExampleTxt:{ fontSize: 11, color: Colors.textSecondary, lineHeight: 16 },
-
-  // ── This Month earned ──
-  earnedCard:    { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.secondary, borderRadius: 14, paddingVertical: 16, marginBottom: 14 },
-  earnedItem:    { flex: 1, alignItems: 'center' },
-  earnedLabel:   { fontSize: 11, color: 'rgba(255,255,255,0.6)', marginBottom: 4 },
-  earnedValue:   { fontSize: 15, fontWeight: '900', color: '#FFF' },
-  earnedDivider: { width: 1, height: 30, backgroundColor: 'rgba(255,255,255,0.15)' },
 
   // ── Modal ──
   modalOverlay:   { flex: 1, backgroundColor: 'rgba(15,22,38,0.55)', justifyContent: 'center', padding: 24 },

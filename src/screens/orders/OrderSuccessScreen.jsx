@@ -26,17 +26,8 @@ const OrderSuccessScreen = ({ navigation, route }) => {
             navigation.replace(SCREENS.HOME);
           }
         }}
-        secondaryButtonTitle="TRACK ORDER"
-        onSecondaryPress={() => {
-          if (orderDbId) {
-            navigation.replace(SCREENS.HOME);
-            setTimeout(() => navigation.navigate(SCREENS.ORDER_TRACKING, { orderId: orderDbId }), 100);
-          } else {
-            navigation.replace(SCREENS.HOME);
-          }
-        }}
-        tertiaryButtonTitle="BACK TO HOME"
-        onTertiaryPress={() => navigation.replace(SCREENS.HOME)}
+        secondaryButtonTitle="BACK TO HOME"
+        onSecondaryPress={() => navigation.replace(SCREENS.HOME)}
       />
     </SafeAreaView>
   );

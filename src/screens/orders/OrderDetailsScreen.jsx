@@ -1,71 +1,113 @@
-import React, { useState, useEffect, useCallback } from 'react';
+/**
+ * src/screens/orders/OrderDetailsScreen.jsx  (Retailer app)
+ *
+ * Literal structural port of the wholesaler's `order/OrderDetailScreen.jsx`.
+ * Section order and content are the wholesaler's:
+ *
+ *   [ header card: order code · date · status chip ]
+ *   [ SECTION  label + primary value + sub value   ]
+ *   [ SECTION  label + one row per line item       ]
+ *   [ TOTALS   Subtotal / GST / Discount / Grand   ]
+ *   [ action block                                 ]
+ *
+ * ── Removed to match the wholesaler ─────────────────────────────────────────
+ * The previous version carried a progress stepper, ordered/dispatched/remaining
+ * counters, a dispatch list, an invoice list, a delivery-OTP entry button and a
+ * created-by block. The wholesaler has none of those, so they are gone.
+ * Nothing became unreachable: tracking is still entered from OrderSuccess, the
+ * delivery OTP from OrderTracking, and invoices from the Invoices screen.
+ *
+ * ── Deliberate deviations, and why ──────────────────────────────────────────
+ * 1. PARTY SECTION — the wholesaler's "Customer" block shows the party it is
+ *    fulfilling for. The retailer is the BUYER, and `createOrder` writes the
+ *    retailer's OWN company name into `customer_name`
+ *    (retailerMarketplaceController ~line 1321), so rendering `customer.name`
+ *    would print the retailer to itself. The meaningful counterparty is the
+ *    seller, so this section is labelled "Seller" and reads `order.seller`.
+ *    Same slot, same styling, correct party.
+ *
+ * 2. ACTION BLOCK — the wholesaler's four buttons are seller actions
+ *    (Accept / Reject, Update Status, Generate GST Invoice, Create Dispatch) and
+ *    have no buyer-side endpoints on the retailer API. The wholesaler's own row
+ *    is Accept + Reject; the retailer is the buyer, so both collapse to the one
+ *    action it actually has: Cancel (New or Accepted). Remove the block entirely
+ *    if you want the order to be read-only.
+ *
+ *    The previous "Track Order" button is gone, along with OrderTrackingScreen
+ *    and DeliveryOTPScreen. The wholesaler has NO order-tracking feature at all
+ *    — its only tracking screen is the seller-side Dispatch Tracking, and that
+ *    one never links to Order Detail either. Parity means not having it here.
+ *
+ * 3. DELIVERY — a "Delivery" section renders the shipping address when present.
+ *    The wholesaler's order has no delivery address to show; the retailer's DTO
+ *    does, and a buyer needs it.
+ *
+ * The retailer DTO carries a single product per order (`product`, `qty`,
+ * `unit_price`, `amount`, `gst_amount`), not an `items[]` array, so the products
+ * section renders one row — in the wholesaler's item-row shape.
+ */
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, StatusBar, TouchableOpacity,
-  ActivityIndicator, RefreshControl,
+  ActivityIndicator, Alert, ScrollView, StatusBar,
+  StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Ionicons from 'react-native-vector-icons/Ionicons';
 import { Colors } from '../../theme/colors';
 import { Typography } from '../../theme/typography';
 import { Spacing, BorderRadius, Shadows } from '../../theme/spacing';
 import AppHeader from '../../components/common/AppHeader';
 import StatusBadge from '../../components/common/StatusBadge';
-import PrimaryButton from '../../components/common/PrimaryButton';
-import SalesOrderStepper from '../../components/order/SalesOrderStepper';
 import { formatDate, formatCurrency } from '../../utils/formatters';
-import { orderApi, invoiceApi } from '../../utils/api';
-import { SCREENS } from '../../constants';
+import { orderApi } from '../../utils/api';
 
 export default function OrderDetailsScreen({ navigation, route }) {
   const { orderId, order: passedOrder } = route.params || {};
   const resolvedId = orderId || passedOrder?.id;
 
-  const [order, setOrder]           = useState(null);
-  const [dispatches, setDispatches] = useState([]);
-  const [invoices, setInvoices]     = useState([]);
-  const [loading, setLoading]       = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError]           = useState('');
+  const [order, setOrder]         = useState(null);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState('');
   const [cancelLoading, setCancelLoading] = useState(false);
 
   const load = useCallback(async () => {
-    if (!resolvedId) return;
+    if (!resolvedId) { setLoading(false); return; }
     setError('');
     try {
-      const data = await orderApi.get(resolvedId);
-      setOrder(data);
-
-      // Best-effort: dispatches + invoices (endpoints may not exist yet)
-      const [disp, inv] = await Promise.allSettled([
-        orderApi.dispatches(resolvedId),
-        invoiceApi.byOrder(resolvedId),
-      ]);
-      if (disp.status === 'fulfilled') setDispatches(disp.value?.dispatches || []);
-      if (inv.status === 'fulfilled') setInvoices(inv.value?.invoices || []);
+      setOrder(await orderApi.get(resolvedId));
     } catch (err) {
       setError(err.message || 'Could not load order.');
+    } finally {
+      setLoading(false);
     }
   }, [resolvedId]);
 
-  useEffect(() => { (async () => { setLoading(true); await load(); setLoading(false); })(); }, [load]);
-  const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
+  useEffect(() => { load(); }, [load]);
 
-  const handleCancel = async () => {
-    setCancelLoading(true);
-    try {
-      await orderApi.cancel(resolvedId);
-      await load();
-    } catch (err) {
-      setError(err.message || 'Could not cancel order.');
-    } finally {
-      setCancelLoading(false);
-    }
+  const onCancel = () => {
+    Alert.alert('Cancel Order?', 'Mark this order as cancelled?', [
+      { text: 'No', style: 'cancel' },
+      {
+        text: 'Cancel Order',
+        style: 'destructive',
+        onPress: async () => {
+          setCancelLoading(true);
+          try {
+            await orderApi.cancel(resolvedId);
+            await load();
+          } catch (err) {
+            Alert.alert('Failed', err.message || 'Could not cancel the order.');
+          } finally {
+            setCancelLoading(false);
+          }
+        },
+      },
+    ]);
   };
 
   if (loading) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
+        <StatusBar barStyle="light-content" backgroundColor={Colors.secondary} />
         <AppHeader title="Order Details" showBack onBack={() => navigation.goBack()} centerTitle variant="primary" />
         <View style={styles.center}><ActivityIndicator color={Colors.primary} /></View>
       </SafeAreaView>
@@ -75,295 +117,160 @@ export default function OrderDetailsScreen({ navigation, route }) {
   if (!order) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
+        <StatusBar barStyle="light-content" backgroundColor={Colors.secondary} />
         <AppHeader title="Order Details" showBack onBack={() => navigation.goBack()} centerTitle variant="primary" />
         <View style={styles.center}>
           <Text style={styles.errorTextFull}>{error || 'Order not found.'}</Text>
-          <TouchableOpacity onPress={onRefresh}><Text style={styles.retryText}>Retry</Text></TouchableOpacity>
+          <TouchableOpacity onPress={load}><Text style={styles.retryText}>Retry</Text></TouchableOpacity>
         </View>
       </SafeAreaView>
     );
   }
 
-  const canTrack  = ['Accepted', 'Packing', 'Dispatched', 'Out for Delivery', 'Delivered',
-    // legacy backward-compat
-    'Processing', 'Ready', 'ReadyForDispatch', 'InTransit'].includes(order.status);
-  const canCancel = ['New', 'Accepted'].includes(order.status);
-  const charges   = (order.charges?.transport || 0) + (order.charges?.packing || 0) + (order.charges?.other || 0);
+  const status   = order.status || '';
+  const canCancel = ['New', 'Accepted'].includes(status);
 
-  // Partial dispatch summary — prefer the order's own counters, fall back to
-  // summing the dispatch batches.
-  const ordered    = Number(order.qty || 0);
-  const summedDispatched = dispatches.reduce((sum, d) => sum + Number(d.qty || d.quantity || 0), 0);
-  const dispatched = order.dispatched_qty != null ? Number(order.dispatched_qty) : summedDispatched;
-  const remaining  = order.remaining_qty != null ? Number(order.remaining_qty) : Math.max(ordered - dispatched, 0);
+  // Line total, in the wholesaler's "qty x rate + gst" shape.
+  const qty   = Number(order.qty || 0);
+  const rate  = Number(order.unit_price || 0);
+  const lineGst = Number(order.gst_amount || 0);
+  const lineTotal = (qty * rate) + lineGst;
+
+  const subtotal = Number(order.amount || 0);
+  const gst      = lineGst;
+  const discount = Number(order.discount || 0);
+  const grand    = Number(order.total_amount || 0);
+
+  const seller = order.seller || {};
+  const partyName = seller.name || order.created_by?.company || order.customer?.name || '—';
+  const partySub  = [seller.city, seller.state].filter(Boolean).join(', ');
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
-      <AppHeader
-        title="Order Details"
-        showBack
-        onBack={() => navigation.goBack()}
-        centerTitle
-        variant="primary"
-        rightComponent={canTrack ? (
-          <TouchableOpacity onPress={() => navigation.navigate(SCREENS.ORDER_TRACKING, { orderId: resolvedId })}>
-            <Text style={styles.trackLink}>Track</Text>
-          </TouchableOpacity>
-        ) : null}
-      />
+      <StatusBar barStyle="light-content" backgroundColor={Colors.secondary} />
+      <AppHeader title="Order Details" showBack onBack={() => navigation.goBack()} centerTitle variant="primary" />
 
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.primary]} />}
-      >
-        {/* Status Banner */}
-        <View style={styles.statusCard}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.eyebrow}>SALES ORDER</Text>
-            <Text style={styles.orderId}>{order.order_code}</Text>
-            <Text style={styles.orderDate}>Placed on {formatDate(order.created_at)}</Text>
-            {order.enquiry_code ? (
-              <TouchableOpacity onPress={() => order.enquiry_id && navigation.navigate(SCREENS.ENQUIRY_DETAILS, { enquiryId: order.enquiry_id })}>
-                <Text style={styles.quotationLink}>From Quotation {order.enquiry_code}</Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-          <StatusBadge status={order.status} type="order" size="md" />
-        </View>
-
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         {error ? <View style={styles.errorInline}><Text style={styles.errorInlineText}>{error}</Text></View> : null}
 
-        {/* Fulfilment timeline */}
-        <View style={styles.stepperCard}>
-          <View style={styles.stepperHeader}>
-            <View style={styles.stepperBar} />
-            <Text style={styles.stepperTitle}>Order Progress</Text>
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={styles.orderNo}>{order.order_code || '—'}</Text>
+          <Text style={styles.date}>{formatDate(order.created_at)}</Text>
+          <View style={styles.statusWrap}>
+            <StatusBadge status={status} type="order" size="md" />
           </View>
-          <SalesOrderStepper status={order.status} />
         </View>
 
-        {/* Quantity summary — ordered / dispatched / remaining */}
-        <View style={styles.qtyCard}>
-          <QtyStat label="Ordered" value={`${ordered}`} unit={order.unit} color={Colors.secondary} />
-          <View style={styles.qtyDivider} />
-          <QtyStat label="Dispatched" value={`${dispatched}`} unit={order.unit} color={Colors.primary} />
-          <View style={styles.qtyDivider} />
-          <QtyStat label="Remaining" value={`${remaining}`} unit={order.unit} color={remaining > 0 ? Colors.warning : Colors.success} />
+        {/* Party — see header note #1 */}
+        <View style={styles.section}>
+          <Text style={styles.label}>Seller</Text>
+          <Text style={styles.value}>{partyName}</Text>
+          {partySub ? <Text style={styles.sub}>{partySub}</Text> : null}
         </View>
 
-        {/* Product */}
-        <InfoCard title="Product">
-          <Row label="Product" value={order.product?.name || '—'} />
-          {order.product?.code ? <Row label="Code" value={order.product.code} /> : null}
-          <Row label="Unit Price" value={`${formatCurrency(order.unit_price)}/${order.unit}`} />
-        </InfoCard>
-
-        {/* Dispatches */}
-        {dispatches.length > 0 && (
-          <InfoCard title={`Dispatches (${dispatches.length})`}>
-            {dispatches.map((d, idx) => (
-              <TouchableOpacity
-                key={d.id || d.dispatch_code || idx}
-                style={styles.dispatchRow}
-                activeOpacity={0.8}
-                onPress={() => navigation.navigate(SCREENS.ORDER_TRACKING, { orderId: resolvedId })}
-              >
-                <View style={styles.dispatchIcon}><Ionicons name="car-outline" size={18} color={Colors.primary} /></View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.dispatchCode}>{d.dispatch_code || `Dispatch ${idx + 1}`}</Text>
-                  <Text style={styles.dispatchMeta}>
-                    {d.qty || d.quantity || 0} {d.unit || order.unit}
-                    {d.vehicle_number ? ` · ${d.vehicle_number}` : ''}
-                  </Text>
-                </View>
-                <StatusBadge status={d.status || 'Dispatched'} type="order" />
-              </TouchableOpacity>
-            ))}
-          </InfoCard>
-        )}
-
-        {/* Invoices */}
-        {invoices.length > 0 && (
-          <InfoCard title={`Invoices (${invoices.length})`}>
-            {invoices.map((inv, idx) => (
-              <TouchableOpacity
-                key={inv.id || inv.invoice_number || idx}
-                style={styles.invoiceRow}
-                activeOpacity={0.8}
-                onPress={() => navigation.navigate(SCREENS.INVOICE_DETAILS, { invoiceId: inv.id })}
-              >
-                <View style={styles.invoiceIcon}><Ionicons name="receipt-outline" size={18} color={Colors.secondary} /></View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.invoiceCode}>{inv.invoice_number || inv.invoice_no || `Invoice ${idx + 1}`}</Text>
-                  <Text style={styles.invoiceMeta}>
-                    {inv.qty || 0} {order.unit} · {formatCurrency(inv.total_amount || inv.grand_total || inv.amount)}
-                  </Text>
-                </View>
-                <StatusBadge status={inv.payment_status || 'Unpaid'} type="payment" />
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity
-              style={styles.viewAllInvoices}
-              onPress={() => navigation.navigate(SCREENS.INVOICES, { orderId: resolvedId })}
-            >
-              <Text style={styles.viewAllText}>View all invoices</Text>
-              <Ionicons name="chevron-forward" size={14} color={Colors.primary} />
-            </TouchableOpacity>
-          </InfoCard>
-        )}
-
-        {/* Price */}
-        <InfoCard title="Price Summary">
-          <Row label="Subtotal" value={formatCurrency(order.amount)} />
-          <Row label={`GST (${order.gst_percent}%)`} value={formatCurrency(order.gst_amount)} />
-          {charges > 0 && <Row label="Charges" value={formatCurrency(charges)} />}
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Total</Text>
-            <Text style={styles.totalValue}>{formatCurrency(order.total_amount)}</Text>
+        {/* Products */}
+        <View style={styles.section}>
+          <Text style={styles.label}>Products</Text>
+          <View style={styles.itemRow}>
+            <Text style={styles.itemName}>{order.product?.name || '—'}</Text>
+            {order.product?.code ? <Text style={styles.itemCode}>{order.product.code}</Text> : null}
+            <Text style={styles.itemDetail}>
+              {qty} {order.unit || ''} × {formatCurrency(rate)} + {formatCurrency(lineGst)} GST = {formatCurrency(lineTotal)}
+            </Text>
           </View>
-        </InfoCard>
+        </View>
 
-        {/* Delivery — only when it differs from the customer address (avoid duplication) */}
-        {order.delivery_address && order.delivery_address !== order.customer?.address ? (
-          <InfoCard title="Delivery Address">
-            <View style={styles.addressBox}><Text style={styles.addressText}>{order.delivery_address}</Text></View>
-          </InfoCard>
+        {/* Delivery — see header note #3 */}
+        {order.delivery_address ? (
+          <View style={styles.section}>
+            <Text style={styles.label}>Delivery</Text>
+            <Text style={styles.sub}>{order.delivery_address}</Text>
+          </View>
         ) : null}
 
-        {/* Customer — who the retailer created this order for, with the
-            Created By (retailer) details nested underneath. */}
-        {(order.customer?.name || order.customer?.mobile || order.customer?.address || order.created_by?.name || order.created_by?.company) && (
-          <InfoCard title="Customer">
-            {order.customer?.name ? <Row label="Name" value={order.customer.name} /> : null}
-            {order.customer?.mobile ? <Row label="Mobile" value={order.customer.mobile} /> : null}
-            {order.customer?.email ? <Row label="Email" value={order.customer.email} /> : null}
-            {order.customer?.address ? <Row label="Address" value={order.customer.address} /> : null}
-            {(order.created_by?.name || order.created_by?.company || order.created_by?.mobile || order.created_by?.email) ? (
-              <View style={styles.nestedBox}>
-                <Text style={styles.nestedTitle}>CREATED BY{order.created_by?.type ? ` (${order.created_by.type})` : ''}</Text>
-                {order.created_by?.name ? <Row label="Name" value={order.created_by.name} /> : null}
-                {order.created_by?.company ? <Row label="Company" value={order.created_by.company} /> : null}
-                {order.created_by?.mobile ? <Row label="Phone" value={order.created_by.mobile} /> : null}
-                {order.created_by?.email ? <Row label="Email" value={order.created_by.email} /> : null}
-              </View>
-            ) : null}
-          </InfoCard>
-        )}
+        {/* Totals */}
+        <View style={styles.totals}>
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>Subtotal</Text>
+            <Text style={styles.totalValue}>{formatCurrency(subtotal)}</Text>
+          </View>
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>GST</Text>
+            <Text style={styles.totalValue}>{formatCurrency(gst)}</Text>
+          </View>
+          {discount > 0 ? (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Discount</Text>
+              <Text style={[styles.totalValue, styles.discountValue]}>-{formatCurrency(discount)}</Text>
+            </View>
+          ) : null}
+          <View style={[styles.totalRow, styles.grandTotal]}>
+            <Text style={styles.grandLabel}>Grand Total</Text>
+            <Text style={styles.grandValue}>{formatCurrency(grand)}</Text>
+          </View>
+        </View>
 
-        {/* Actions */}
-        {(order.status === 'Out for Delivery' || order.status === 'Dispatched' || order.status === 'InTransit') && (
-          <PrimaryButton
-            title="ENTER DELIVERY OTP"
-            onPress={() => navigation.navigate(SCREENS.DELIVERY_OTP, { orderId: resolvedId, dispatchId: dispatches[0]?.id })}
-            variant="secondary"
-            size="lg"
-            style={styles.actionBtn}
-          />
-        )}
-        {canTrack && (
-          <PrimaryButton
-            title="TRACK ORDER"
-            onPress={() => navigation.navigate(SCREENS.ORDER_TRACKING, { orderId: resolvedId })}
-            variant="outline"
-            size="lg"
-            style={styles.actionBtn}
-          />
-        )}
-        {canCancel && (
-          <PrimaryButton
-            title="CANCEL ORDER"
-            onPress={handleCancel}
-            loading={cancelLoading}
-            variant="outline"
-            size="lg"
-            style={styles.actionBtn}
-          />
-        )}
+        {/* Actions — see header note #2 */}
+        {canCancel ? (
+          <View style={styles.actionRow}>
+            <TouchableOpacity
+              style={[styles.rejectBtn, cancelLoading && styles.btnOff]}
+              disabled={cancelLoading}
+              onPress={onCancel}
+              activeOpacity={0.85}
+            >
+              {cancelLoading
+                ? <ActivityIndicator size="small" color={Colors.error} />
+                : <Text style={styles.rejectBtnText}>Cancel Order</Text>}
+            </TouchableOpacity>
+          </View>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-const InfoCard = ({ title, children }) => (
-  <View style={styles.card}>
-    <View style={styles.cardHeader}>
-      <View style={styles.cardBar} />
-      <Text style={styles.cardTitle}>{title}</Text>
-    </View>
-    {children}
-  </View>
-);
-
-const Row = ({ label, value, valueStyle }) => (
-  <View style={styles.row}>
-    <Text style={styles.rowLabel}>{label}</Text>
-    <Text style={[styles.rowValue, valueStyle]} numberOfLines={2}>{value}</Text>
-  </View>
-);
-
-const QtyStat = ({ label, value, unit, color }) => (
-  <View style={styles.qtyStat}>
-    <Text style={[styles.qtyValue, { color }]}>{value}</Text>
-    <Text style={styles.qtyUnit}>{unit}</Text>
-    <Text style={styles.qtyLabel}>{label}</Text>
-  </View>
-);
-
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
-  scroll: { padding: Spacing.screenPadding, paddingBottom: 40, gap: 12 },
+  scroll: { padding: Spacing.base, paddingBottom: 40, gap: 10 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24 },
   errorTextFull: { ...Typography.body2, color: Colors.textSecondary, textAlign: 'center' },
   retryText: { ...Typography.body2, color: Colors.primary, fontWeight: '700' },
-  trackLink: { ...Typography.body2, color: Colors.white, fontWeight: '700' },
   errorInline: { backgroundColor: Colors.errorBg, borderRadius: BorderRadius.md, padding: Spacing.sm },
   errorInlineText: { ...Typography.caption, color: Colors.error },
-  statusCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: Colors.white, borderRadius: BorderRadius.xl, padding: Spacing.base, ...Shadows.sm, borderLeftWidth: 3, borderLeftColor: Colors.secondary },
-  eyebrow: { ...Typography.caption, color: Colors.primary, fontWeight: '800', fontSize: 10, letterSpacing: 0.6, marginBottom: 2 },
-  stepperCard: { backgroundColor: Colors.white, borderRadius: BorderRadius.xl, padding: Spacing.base, ...Shadows.sm },
-  stepperHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.md },
-  stepperBar: { width: 3, height: 16, backgroundColor: Colors.secondary, borderRadius: 2, marginRight: 8 },
-  stepperTitle: { ...Typography.h5, color: Colors.textPrimary },
-  orderId: { ...Typography.h5, color: Colors.textPrimary },
-  orderDate: { ...Typography.caption, color: Colors.textTertiary, marginTop: 2 },
-  quotationLink: { ...Typography.caption, color: Colors.primary, fontWeight: '600', marginTop: 3 },
 
-  qtyCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.white, borderRadius: BorderRadius.xl, padding: Spacing.base, ...Shadows.sm },
-  qtyStat: { flex: 1, alignItems: 'center' },
-  qtyValue: { ...Typography.h3, fontWeight: '800' },
-  qtyUnit: { ...Typography.caption, color: Colors.textTertiary, fontSize: 10 },
-  qtyLabel: { ...Typography.caption, color: Colors.textSecondary, marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.4, fontSize: 10 },
-  qtyDivider: { width: 1, height: 40, backgroundColor: Colors.borderLight },
+  header: { backgroundColor: Colors.white, borderRadius: BorderRadius.lg, padding: Spacing.base, ...Shadows.sm },
+  orderNo: { ...Typography.h4, fontWeight: '800', color: Colors.secondary },
+  date: { ...Typography.caption, color: Colors.textSecondary, marginTop: 2 },
+  statusWrap: { marginTop: Spacing.sm, alignItems: 'flex-start' },
 
-  card: { backgroundColor: Colors.white, borderRadius: BorderRadius.xl, padding: Spacing.base, ...Shadows.sm },
-  cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.md },
-  cardBar: { width: 3, height: 16, backgroundColor: Colors.secondary, borderRadius: 2, marginRight: 8 },
-  cardTitle: { ...Typography.h5, color: Colors.textPrimary },
-  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
-  rowLabel: { ...Typography.caption, color: Colors.textSecondary, flex: 0.4 },
-  rowValue: { ...Typography.caption, color: Colors.textPrimary, fontWeight: '600', flex: 0.6, textAlign: 'right' },
-  totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: Spacing.md, marginTop: 4 },
-  totalLabel: { ...Typography.h5, color: Colors.textPrimary },
-  totalValue: { ...Typography.h4, color: Colors.primary },
-  addressBox: { backgroundColor: Colors.background, borderRadius: BorderRadius.md, padding: Spacing.md },
-  addressText: { ...Typography.body2, color: Colors.textSecondary, lineHeight: 22 },
-  nestedBox: { backgroundColor: Colors.background, borderRadius: BorderRadius.md, padding: Spacing.md, marginTop: Spacing.md },
-  nestedTitle: { ...Typography.caption, color: Colors.textTertiary, fontSize: 10, fontWeight: '800', letterSpacing: 0.5, marginBottom: 4 },
+  section: { backgroundColor: Colors.white, borderRadius: BorderRadius.lg, padding: Spacing.md + 2, ...Shadows.sm },
+  label: {
+    ...Typography.caption, fontSize: 11, fontWeight: '700', color: Colors.textSecondary,
+    textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6,
+  },
+  value: { ...Typography.body1, fontWeight: '700', color: Colors.textPrimary },
+  sub: { ...Typography.caption, color: Colors.textSecondary, marginTop: 2, lineHeight: 19 },
+  itemRow: {},
+  itemName: { ...Typography.body2, fontWeight: '600', color: Colors.textPrimary },
+  itemCode: { ...Typography.caption, fontSize: 10.5, color: Colors.textTertiary, marginTop: 1 },
+  itemDetail: { ...Typography.caption, color: Colors.textSecondary, marginTop: 2 },
 
-  dispatchRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
-  dispatchIcon: { width: 36, height: 36, borderRadius: 10, backgroundColor: Colors.primaryBg, alignItems: 'center', justifyContent: 'center' },
-  dispatchCode: { ...Typography.body2, color: Colors.textPrimary, fontWeight: '700' },
-  dispatchMeta: { ...Typography.caption, color: Colors.textSecondary, marginTop: 1 },
+  totals: { backgroundColor: Colors.white, borderRadius: BorderRadius.lg, padding: Spacing.md + 2, ...Shadows.sm },
+  totalRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: Spacing.sm },
+  totalLabel: { ...Typography.caption, color: Colors.textSecondary },
+  totalValue: { ...Typography.caption, fontWeight: '600', color: Colors.textPrimary },
+  discountValue: { color: Colors.error },
+  grandTotal: { borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: Spacing.sm, marginTop: 4, marginBottom: 0 },
+  grandLabel: { ...Typography.body2, fontWeight: '700', color: Colors.textPrimary },
+  grandValue: { ...Typography.h5, fontWeight: '800', color: Colors.primary },
 
-  invoiceRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
-  invoiceIcon: { width: 36, height: 36, borderRadius: 10, backgroundColor: Colors.secondaryBg, alignItems: 'center', justifyContent: 'center' },
-  invoiceCode: { ...Typography.body2, color: Colors.textPrimary, fontWeight: '700' },
-  invoiceMeta: { ...Typography.caption, color: Colors.textSecondary, marginTop: 1 },
-  viewAllInvoices: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingTop: 10 },
-  viewAllText: { ...Typography.caption, color: Colors.primary, fontWeight: '700' },
-
-  actionBtn: { marginTop: 4 },
+  actionRow: { flexDirection: 'row', gap: 10, marginTop: Spacing.sm },
+  rejectBtn: {
+    flex: 1, backgroundColor: Colors.white, borderRadius: BorderRadius.lg, paddingVertical: 14,
+    alignItems: 'center', borderWidth: 1.5, borderColor: Colors.error,
+  },
+  rejectBtnText: { color: Colors.error, ...Typography.body1, fontWeight: '800' },
+  btnOff: { opacity: 0.6 },
 });

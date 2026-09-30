@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, Switch,
-  TouchableOpacity, StatusBar, KeyboardAvoidingView, Platform, Image,
+  TouchableOpacity, StatusBar, Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -9,9 +9,6 @@ import { Colors } from '../../theme/colors';
 import { Typography } from '../../theme/typography';
 import { Spacing, BorderRadius, Shadows } from '../../theme/spacing';
 import AppHeader from '../../components/common/AppHeader';
-import TextInput from '../../components/common/TextInput';
-import PrimaryButton from '../../components/common/PrimaryButton';
-import { profileApi } from '../../utils/api';
 
 const LOGO = require('../../assets/logo.jpeg');
 
@@ -69,69 +66,6 @@ export const NotificationSettingsScreen = ({ navigation }) => {
           <Text style={styles.note}>Manage push notification permissions in your device settings.</Text>
         </View>
       </ScrollView>
-    </SafeAreaView>
-  );
-};
-
-// ─── Change Password ─────────────────────────────────────────────────────────
-export const ChangePasswordScreen = ({ navigation }) => {
-  const [form, setForm]     = useState({ current: '', newPass: '', confirm: '' });
-  const [errors, setErrors] = useState({});
-  const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
-
-  const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
-
-  const validate = () => {
-    const e = {};
-    if (!form.current) e.current = 'Current password is required';
-    if (!form.newPass || form.newPass.length < 6) e.newPass = 'Minimum 6 characters';
-    if (form.newPass !== form.confirm) e.confirm = 'Passwords do not match';
-    setErrors(e);
-    return Object.keys(e).length === 0;
-  };
-
-  const handleChange = async () => {
-    if (!validate()) return;
-    setLoading(true);
-    try {
-      await profileApi.changePassword(form.current, form.newPass);
-      setLoading(false);
-      setSuccess(true);
-      setTimeout(() => navigation.goBack(), 1500);
-    } catch (err) {
-      setLoading(false);
-      setErrors({ current: err.message || 'Password change failed.' });
-    }
-  };
-
-  return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
-      <AppHeader title="Change Password" showBack onBack={() => navigation.goBack()} centerTitle />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets={true}>
-          {success ? (
-            <View style={styles.successBox}>
-              <View style={styles.successIconCircle}>
-                <Ionicons name="checkmark" size={32} color={Colors.success} />
-              </View>
-              <Text style={styles.successText}>Password changed successfully!</Text>
-            </View>
-          ) : (
-            <View style={styles.card}>
-              <View style={styles.hintBox}>
-                <Ionicons name="shield-checkmark-outline" size={16} color={Colors.info} />
-                <Text style={styles.hintText}>Choose a strong password with at least 6 characters.</Text>
-              </View>
-              <TextInput label="Current Password" placeholder="Enter current password" value={form.current} onChangeText={v => set('current', v)} error={errors.current} secureTextEntry required />
-              <TextInput label="New Password" placeholder="Minimum 6 characters" value={form.newPass} onChangeText={v => set('newPass', v)} error={errors.newPass} secureTextEntry required />
-              <TextInput label="Confirm New Password" placeholder="Re-enter new password" value={form.confirm} onChangeText={v => set('confirm', v)} error={errors.confirm} secureTextEntry required />
-              <PrimaryButton title="UPDATE PASSWORD" onPress={handleChange} loading={loading} size="lg" />
-            </View>
-          )}
-        </ScrollView>
-      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
@@ -218,11 +152,6 @@ const styles = StyleSheet.create({
   divider: { height: 1, backgroundColor: Colors.borderLight },
   noteBox: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   note: { ...Typography.caption, color: Colors.textTertiary, lineHeight: 18, flex: 1 },
-  hintBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: Colors.infoBg, borderRadius: BorderRadius.md, padding: Spacing.md, marginBottom: Spacing.base },
-  hintText: { ...Typography.caption, color: Colors.infoText, lineHeight: 18, flex: 1 },
-  successBox: { alignItems: 'center', paddingVertical: 60 },
-  successIconCircle: { width: 72, height: 72, borderRadius: 36, backgroundColor: Colors.successBg, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
-  successText: { ...Typography.h4, color: Colors.success, textAlign: 'center' },
   sectionLabel: { ...Typography.label, color: Colors.textSecondary, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: Spacing.md },
   contactRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
   contactIconBox: { width: 36, height: 36, borderRadius: 10, backgroundColor: Colors.primaryBg, alignItems: 'center', justifyContent: 'center' },

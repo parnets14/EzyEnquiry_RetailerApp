@@ -102,14 +102,23 @@ export default function StoneCalculationScreen({ navigation }) {
 
   const handleShare = async (sheet) => {
     const meta = productMeta(sheet.product);
+    const sym = AREA_SYMBOL[sheet.outputUnit];
+    const amount = Number(sheet.amount || (Number(sheet.total) || 0) * (Number(sheet.price) || 0));
     const lines = [
       `${sheet.party} — ${meta.label}${sheet.name ? ` (${sheet.name})` : ''}`,
       `Date: ${fmtDate(sheet.date)}`,
       '',
       ...sheet.rows.map((r, i) =>
-        `${i + 1}. ${r.length} x ${r.width} = ${fmtArea(rowArea(r.length, r.width, sheet.inputUnit, sheet.outputUnit))} ${AREA_SYMBOL[sheet.outputUnit]}`),
+        `${i + 1}. ${r.length} x ${r.width} = ${fmtArea(rowArea(r.length, r.width, sheet.inputUnit, sheet.outputUnit))} ${sym}`),
       '',
-      `Total: ${fmtArea(sheet.total)} ${AREA_SYMBOL[sheet.outputUnit]}`,
+      `Total: ${fmtArea(sheet.total)} ${sym}`,
+      // Rate / amount only when a rate was actually entered — same as the wholesaler.
+      ...(Number(sheet.price) > 0
+        ? [
+            `Rate: ₹${Number(sheet.price).toLocaleString('en-IN', { maximumFractionDigits: 2 })} / ${sym}`,
+            `Amount: ₹${amount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`,
+          ]
+        : []),
     ];
     try {
       // Built-in Share — the wholesaler's react-native-share is not a dep here.
@@ -368,7 +377,7 @@ function NewSheetModal({ productKey, onClose, onCreate }) {
     onCreate({
       id: null, product: productKey, name: name.trim(), party: party.trim(), date: date.trim(),
       inputUnit: 'inch', outputUnit: 'feet',
-      rows: Array.from({ length: n }, () => ({ length: '', width: '' })), total: 0,
+      rows: Array.from({ length: n }, () => ({ length: '', width: '' })), total: 0, price: 0,
     });
   };
 
@@ -456,11 +465,17 @@ function EditView({ sheet, onSaved }) {
   const [rows, setRows]           = useState(sheet.rows.length ? sheet.rows : [{ length: '', width: '' }]);
   const [inputUnit, setInputUnit] = useState(sheet.inputUnit || 'inch');
   const [outputUnit, setOutput]   = useState(sheet.outputUnit || 'feet');
+  const [price, setPrice]         = useState(String(sheet.price || ''));
   const [saving, setSaving]       = useState(false);
   const [pickerFor, setPickerFor] = useState(null);
 
   const sym = AREA_SYMBOL[outputUnit];
   const total = useMemo(() => sumArea(rows, inputUnit, outputUnit), [rows, inputUnit, outputUnit]);
+  // Amount is DERIVED, never stored independently — total × rate per unit area.
+  const amount = useMemo(() => {
+    const p = parseFloat(price);
+    return isFinite(p) && p > 0 ? total * p : 0;
+  }, [total, price]);
 
   const setCell = (i, field, val) => setRows(rs => rs.map((r, idx) => (idx === i ? { ...r, [field]: val } : r)));
   const addRow = () => setRows(rs => [...rs, { length: '', width: '' }]);
@@ -473,7 +488,12 @@ function EditView({ sheet, onSaved }) {
 
   const save = async () => {
     setSaving(true);
-    const payload = { product: sheet.product, name: sheet.name, party: sheet.party, date: sheet.date, inputUnit, outputUnit, rows, total };
+    const payload = {
+      product: sheet.product, name: sheet.name, party: sheet.party, date: sheet.date,
+      inputUnit, outputUnit, rows, total,
+      price: parseFloat(price) || 0,
+      amount,
+    };
     if (sheet.id) await stoneService.update(sheet.id, payload);
     else          await stoneService.create(payload);
     setSaving(false);
@@ -498,6 +518,33 @@ function EditView({ sheet, onSaved }) {
         <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16 }}>
           <UnitField label="Input unit"  value={inputUnit}  accent={NAVY}   onPress={() => setPickerFor('input')} />
           <UnitField label="Output unit" value={outputUnit} accent={ORANGE} onPress={() => setPickerFor('output')} />
+        </View>
+
+        {/* Rate per unit area → derived Total Amount (optional). Same as the
+            wholesaler: enter a rate and the amount appears live beside it. */}
+        <View style={st.priceRow}>
+          <View style={st.priceIconWrap}>
+            <Ionicons name="cash-outline" size={20} color={ORANGE} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={st.fieldLabel}>Rate per {sym} (optional)</Text>
+            <TextInput
+              style={st.priceInput}
+              value={price}
+              onChangeText={t => setPrice(t.replace(/[^\d.]/g, ''))}
+              keyboardType="decimal-pad"
+              placeholder="e.g. 350"
+              placeholderTextColor={MUTED}
+            />
+          </View>
+          {parseFloat(price) > 0 && (
+            <View style={st.amountBadge}>
+              <Text style={st.amountBadgeLabel}>Total Amount</Text>
+              <Text style={st.amountBadgeValue}>
+                ₹ {amount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+              </Text>
+            </View>
+          )}
         </View>
 
         {/* per-row cards */}
@@ -544,6 +591,9 @@ function EditView({ sheet, onSaved }) {
         <View>
           <Text style={st.footerLabel}>Sum Total</Text>
           <Text style={st.footerTotal}>{fmtArea(total, 2)} <Text style={st.footerUnit}>{sym}</Text></Text>
+          {parseFloat(price) > 0 && (
+            <Text style={st.footerAmount}>₹ {amount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</Text>
+          )}
         </View>
         <TouchableOpacity style={[st.footerSave, saving && { opacity: 0.7 }]} onPress={save} disabled={saving}>
           <Ionicons name="save-outline" size={18} color="#fff" />
@@ -626,6 +676,27 @@ function SheetView({ sheet, onShare, onEdit }) {
         <View style={st.viewTotalCard}>
           <Text style={st.footerLabel}>Sum Total</Text>
           <Text style={st.viewTotalValue}>{fmtArea(sheet.total, 2)} <Text style={st.footerUnit}>{sym}</Text></Text>
+          {/* Rate / amount breakdown — only when a rate was saved. */}
+          {Number(sheet.price) > 0 && (
+            <>
+              <View style={st.viewPriceDivider} />
+              <View style={st.viewPriceRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={st.footerLabel}>Rate per {sym}</Text>
+                  <Text style={st.viewPriceValue}>
+                    ₹ {Number(sheet.price).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                  </Text>
+                </View>
+                <View style={st.viewAmountBox}>
+                  <Text style={st.viewAmountLabel}>TOTAL AMOUNT</Text>
+                  <Text style={st.viewAmountValue}>
+                    ₹ {Number(sheet.amount || (Number(sheet.total) || 0) * Number(sheet.price))
+                        .toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                  </Text>
+                </View>
+              </View>
+            </>
+          )}
         </View>
       </ScrollView>
 
@@ -806,7 +877,36 @@ const st = StyleSheet.create({
   viewDim: { flex: 1, fontSize: 14.5, fontWeight: '700', color: TEXT },
   viewX: { color: MUTED, fontWeight: '600' },
   viewTotalCard: {
-    backgroundColor: NAVY, borderRadius: 16, padding: 18, marginTop: 12, alignItems: 'center',
+    backgroundColor: NAVY, borderRadius: 16, padding: 18, marginTop: 12,
+    // Column + stretch so the rate/amount row spans the full card width once a
+    // rate is set (the wholesaler uses the same column layout). Without a rate
+    // the single centred total still reads correctly.
+    flexDirection: 'column', alignItems: 'stretch',
   },
   viewTotalValue: { fontSize: 26, fontWeight: '800', color: '#FFF', marginTop: 4 },
+  viewPriceDivider: { height: 1, backgroundColor: 'rgba(255,255,255,0.15)', marginVertical: 12 },
+  viewPriceRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  viewPriceValue: { fontSize: 18, fontWeight: '800', color: '#FFF', marginTop: 2 },
+  viewAmountBox: { backgroundColor: ORANGE, borderRadius: 12, padding: 12, alignItems: 'flex-end' },
+  viewAmountLabel: { fontSize: 9, fontWeight: '900', letterSpacing: 1.5, color: 'rgba(255,255,255,0.8)' },
+  viewAmountValue: { fontSize: 20, fontWeight: '900', color: '#FFF', marginTop: 2 },
+
+  /* Price row in edit view */
+  priceRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#FFF',
+    borderRadius: 14, padding: 14, marginBottom: 16, ...Shadows.sm,
+  },
+  priceIconWrap: {
+    width: 44, height: 44, borderRadius: 13, backgroundColor: ORANGE_LT,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  priceInput: {
+    borderWidth: 1.5, borderColor: BORDER, borderRadius: 10, height: 44,
+    paddingHorizontal: 12, fontSize: 14.5, fontWeight: '700', color: TEXT,
+    backgroundColor: '#F8FAFC', marginTop: 2,
+  },
+  amountBadge: { alignItems: 'flex-end', backgroundColor: ORANGE_LT, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8 },
+  amountBadgeLabel: { fontSize: 9, fontWeight: '900', letterSpacing: 1.2, color: ORANGE },
+  amountBadgeValue: { fontSize: 15, fontWeight: '900', color: ORANGE, marginTop: 2 },
+  footerAmount: { fontSize: 14, fontWeight: '800', color: ORANGE, marginTop: 2 },
 });

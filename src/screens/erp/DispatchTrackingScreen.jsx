@@ -13,8 +13,7 @@
  * These are dispatches the retailer OWNS as the seller: orders raised against
  * products the retailer sells. `Dispatch.company_id` is the seller's company,
  * so a retailer's own marketplace PURCHASES never appear here — those are
- * dispatched by their seller and are shown read-only in
- * `screens/orders/DispatchDetailsScreen.jsx` (reached from Order Tracking).
+ * dispatched by their seller and the retailer cannot see that dispatch record.
  *
  * Consequently the list is legitimately empty until the retailer ships
  * something themselves; the empty state says so rather than looking broken.

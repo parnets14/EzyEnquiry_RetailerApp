@@ -7,9 +7,83 @@ import { Colors } from '../../theme/colors';
 import { Typography } from '../../theme/typography';
 import { Spacing, Shadows } from '../../theme/spacing';
 
+// The retailer's own listings are the only ones that reach this sheet.
+//
+// Action set mirrors the wholesaler's `openActions` (ProductListScreen):
+//   Edit · Duplicate · Mark Out of Stock / In Stock ·
+//   Mark Discontinued / Re-list · Activate / Deactivate · Delete
+//
+// Each lifecycle action is rendered from `item`'s current status, so the label
+// always describes the transition that will happen. Rows the caller does not
+// wire up (`onDuplicate` etc. omitted) are hidden, which keeps the sheet usable
+// from contexts that only support a subset.
 export default function ProductActionsModal({
-  visible, productName, onClose, onEdit, onDelete,
+  visible, productName, item,
+  onClose, onEdit, onDelete,
+  onDuplicate, onToggleStock, onToggleDiscontinued, onToggleActive,
 }) {
+  const isOOS      = item?.status === 'out_of_stock';
+  const isDisc     = item?.status === 'discontinued';
+  const isInactive = item?.is_active === false;
+
+  const actions = [
+    onEdit && {
+      key: 'edit',
+      icon: 'create-outline',
+      tint: Colors.primary,
+      iconBg: Colors.primaryBg,
+      title: 'Edit Product',
+      subtitle: 'Update details, pricing, and images',
+      onPress: onEdit,
+    },
+    onDuplicate && {
+      key: 'duplicate',
+      icon: 'copy-outline',
+      tint: Colors.secondary,
+      iconBg: Colors.secondaryBg,
+      title: 'Duplicate',
+      subtitle: 'Start a new product from this one',
+      onPress: onDuplicate,
+    },
+    onToggleStock && {
+      key: 'stock',
+      icon: isOOS ? 'checkmark-circle-outline' : 'alert-circle-outline',
+      tint: isOOS ? '#15803D' : '#B45309',
+      iconBg: isOOS ? '#DCFCE7' : '#FEF3C7',
+      title: isOOS ? 'Mark In Stock' : 'Mark Out of Stock',
+      subtitle: isOOS ? 'Make it orderable again' : 'Hide it from buyers for now',
+      onPress: onToggleStock,
+    },
+    onToggleDiscontinued && {
+      key: 'discontinued',
+      icon: isDisc ? 'refresh-outline' : 'ban-outline',
+      tint: Colors.textSecondary,
+      iconBg: Colors.background,
+      title: isDisc ? 'Re-list Product' : 'Mark Discontinued',
+      subtitle: isDisc ? 'Put it back on sale' : 'Keep the record but stop selling it',
+      onPress: onToggleDiscontinued,
+    },
+    onToggleActive && {
+      key: 'active',
+      icon: isInactive ? 'eye-outline' : 'eye-off-outline',
+      tint: Colors.textSecondary,
+      iconBg: Colors.background,
+      title: isInactive ? 'Activate' : 'Deactivate',
+      subtitle: isInactive ? 'Show it in the catalogues' : 'Hide it from the catalogues',
+      onPress: onToggleActive,
+    },
+    onDelete && {
+      key: 'delete',
+      icon: 'trash-outline',
+      tint: Colors.error,
+      iconBg: '#FEF2F2',
+      title: 'Delete Product',
+      subtitle: 'Remove it from every catalogue',
+      destructive: true,
+      onPress: onDelete,
+    },
+  ].filter(Boolean);
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <TouchableWithoutFeedback onPress={onClose}>
@@ -22,32 +96,37 @@ export default function ProductActionsModal({
                   <Text style={styles.eyebrow}>MANAGE PRODUCT</Text>
                   <Text style={styles.title} numberOfLines={2}>{productName}</Text>
                 </View>
-                <TouchableOpacity style={styles.closeBtn} onPress={onClose} accessibilityLabel="Close product actions">
+                <TouchableOpacity
+                  style={styles.closeBtn}
+                  onPress={onClose}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close product actions"
+                >
                   <Ionicons name="close" size={20} color={Colors.textSecondary} />
                 </TouchableOpacity>
               </View>
 
-              <TouchableOpacity style={styles.action} onPress={onEdit} activeOpacity={0.75}>
-                <View style={[styles.actionIcon, styles.editIcon]}>
-                  <Ionicons name="create-outline" size={22} color={Colors.primary} />
-                </View>
-                <View style={styles.actionText}>
-                  <Text style={styles.actionTitle}>Edit Product</Text>
-                  <Text style={styles.actionSubtitle}>Update details, pricing, and images</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={20} color={Colors.textTertiary} />
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.action} onPress={onDelete} activeOpacity={0.75}>
-                <View style={[styles.actionIcon, styles.deleteIcon]}>
-                  <Ionicons name="trash-outline" size={22} color={Colors.error} />
-                </View>
-                <View style={styles.actionText}>
-                  <Text style={[styles.actionTitle, styles.deleteTitle]}>Delete Product</Text>
-                  <Text style={styles.actionSubtitle}>Remove it from every catalogue</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={20} color={Colors.textTertiary} />
-              </TouchableOpacity>
+              {actions.map(action => (
+                <TouchableOpacity
+                  key={action.key}
+                  style={styles.action}
+                  onPress={action.onPress}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityLabel={action.title}
+                >
+                  <View style={[styles.actionIcon, { backgroundColor: action.iconBg }]}>
+                    <Ionicons name={action.icon} size={22} color={action.tint} />
+                  </View>
+                  <View style={styles.actionText}>
+                    <Text style={[styles.actionTitle, action.destructive && styles.deleteTitle]}>
+                      {action.title}
+                    </Text>
+                    <Text style={styles.actionSubtitle}>{action.subtitle}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color={Colors.textTertiary} />
+                </TouchableOpacity>
+              ))}
             </View>
           </TouchableWithoutFeedback>
         </View>
@@ -84,8 +163,6 @@ const styles = StyleSheet.create({
   actionIcon: {
     width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
   },
-  editIcon: { backgroundColor: Colors.primaryBg },
-  deleteIcon: { backgroundColor: '#FEF2F2' },
   actionText: { flex: 1 },
   actionTitle: { ...Typography.body1, color: Colors.textPrimary, fontWeight: '700' },
   deleteTitle: { color: Colors.error },

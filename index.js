@@ -6,7 +6,7 @@
 import { AppRegistry } from 'react-native';
 import { enableScreens } from 'react-native-screens';
 import messaging from '@react-native-firebase/messaging';
-import { backgroundMessageHandler } from './src/services/notificationService';
+import { backgroundMessageHandler } from './src/services/pushNotificationService';
 import App from './App';
 import { name as appName } from './app.json';
 

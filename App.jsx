@@ -6,7 +6,7 @@ import { AuthProvider } from './src/context/AuthContext';
 import {
   setupForegroundListener,
   handleInitialNotification,
-} from './src/services/notificationService';
+} from './src/services/pushNotificationService';
 
 const App = () => {
   useEffect(() => {

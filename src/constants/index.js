@@ -75,10 +75,10 @@ export const SCREENS = {
   REGISTER: 'Register',
   OTP_VERIFY: 'OTPVerify',
   PENDING_APPROVAL: 'PendingApproval',
-  FORGOT_PASSWORD: 'ForgotPassword',
-  RESET_PASSWORD: 'ResetPassword',
 
-  // Main Tabs
+  // Bottom tabs — mirrors the wholesaler's five tabs
+  // (Home · Enquiries · Products · Sales · Profile).
+  // SEARCH and ORDERS are no longer tabs but remain registered stack screens.
   HOME: 'Home',
   SEARCH: 'Search',
   ENQUIRIES: 'Enquiries',
@@ -87,35 +87,28 @@ export const SCREENS = {
 
   // Products
   PRODUCT_DETAILS: 'ProductDetails',
-  SEARCH_RESULTS: 'SearchResults',
   ADD_PRODUCT: 'AddProduct',
   CATEGORIES_BRANDS: 'CategoriesBrands',
   MY_PRODUCTS: 'MyProducts',
 
   // Enquiry
-  CREATE_ENQUIRY: 'CreateEnquiry',
-  ENQUIRY_SUCCESS: 'EnquirySuccess',
   ENQUIRY_DETAILS: 'EnquiryDetails',
-  NEGOTIATION: 'Negotiation',
-  QUOTATION_CONFIRM: 'QuotationConfirm',
 
-  // Quotations (Send Enquiry → Quotation)
+  // Quotations
   QUOTATIONS: 'Quotations',
-  QUOTATION_DETAILS: 'QuotationDetails',
+  // Order-confirmation step reached from an accepted enquiry offer
+  // (EnquiryDetailsScreen → QuotationConfirmScreen), and the success screen it
+  // hands off to. Both were navigated to by SCREENS.* while the constant was
+  // missing, so the call evaluated to `undefined` and threw at runtime.
+  QUOTATION_CONFIRM: 'QuotationConfirm',
+  ORDER_SUCCESS:     'OrderSuccess',
 
   // Orders
-  ORDER_CONFIRMATION: 'OrderConfirmation',
-  ORDER_SUCCESS: 'OrderSuccess',
   ORDER_DETAILS: 'OrderDetails',
-  ORDER_TRACKING: 'OrderTracking',
-  DISPATCH_DETAILS: 'DispatchDetails',
-  DELIVERY_OTP: 'DeliveryOTP',
 
-  // Invoices & Payments
+  // Invoices
   INVOICES: 'Invoices',
   INVOICE_DETAILS: 'InvoiceDetails',
-  PAYMENT: 'Payment',
-  PAYMENTS: 'Payments',
 
   // Notifications
   NOTIFICATIONS: 'Notifications',
@@ -125,14 +118,7 @@ export const SCREENS = {
   STAFF_ADD_EDIT:   'StaffAddEdit',
 
   // Profile
-  COMPANY_DETAILS: 'CompanyDetails',
-  // KYC verification — the four fixed document slots the CRM reviews before
-  // approving the company. NOT the document repository below.
-  DOCUMENTS: 'Documents',
   SUBSCRIPTION: 'Subscription',
-  NOTIFICATION_SETTINGS: 'NotificationSettings',
-  CHANGE_PASSWORD: 'ChangePassword',
-  HELP_SUPPORT: 'HelpSupport',
 
   // ── ERP modules (wholesaler parity) ──────────────────────────
   // Sales
@@ -148,7 +134,6 @@ export const SCREENS = {
   // Purchase
   PURCHASE_LIST:    'PurchaseList',
   PURCHASE_ENTRY:   'PurchaseEntry',
-  SUPPLIER_LIST:    'SupplierList',
   // Inventory
   INVENTORY:        'Inventory',
   STOCK_ADJUST:     'StockAdjust',
@@ -170,6 +155,14 @@ export const SCREENS = {
   // INBOUND dispatch raised by a seller against one of the retailer's orders.
   DISPATCH_TRACKING: 'DispatchTracking',
   DISPATCH_ENTRY:    'DispatchEntry',
+  // Order fulfilment — the SELLER side of the order lifecycle. "Orders I am
+  // Selling" lists buyer enquiries/orders raised against products this company
+  // owns (company_id === my company). From there the owner accepts the order,
+  // then packs & dispatches it in one or more partial shipments. ORDER_PACK is
+  // the pack form that captures the sent quantity + vehicle details and lets the
+  // backend auto-raise the invoice for the dispatched quantity.
+  ORDER_FULFILMENT:  'OrderFulfilment',
+  ORDER_PACK:        'OrderPack',
   // Documents — free-form repository (typed uploads, filter tabs, list, open,
   // delete), matching the wholesaler's Documents screen. Distinct from the KYC
   // screen at DOCUMENTS above, which is a fixed 4-slot verification flow.

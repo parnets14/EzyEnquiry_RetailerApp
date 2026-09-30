@@ -89,6 +89,7 @@ export default function SalesListScreen({ navigation }) {
             {item.sale_code ? <ErpMetaChip icon="receipt-outline" label={item.sale_code} /> : null}
             {item.invoice_number ? <ErpMetaChip icon="document-text-outline" label={`Inv #${item.invoice_number}`} /> : null}
             {item.warehouse_name ? <ErpMetaChip icon="business-outline" label={item.warehouse_name} /> : null}
+            {item.sales_staff_name ? <ErpMetaChip icon="person-outline" label={item.sales_staff_name} /> : null}
             {sMeta ? <ErpBadge label={item.sale_status} {...sMeta} /> : null}
           </View>
 
@@ -111,7 +112,9 @@ export default function SalesListScreen({ navigation }) {
       <ErpHeader
         title="Sales"
         subtitle="Revenue & transactions"
-        onBack={() => navigation.goBack()}
+        // Sales is now a bottom tab (wholesaler parity), so as a tab root there is
+        // nothing to go back to — ErpHeader hides the button when onBack is undefined.
+        onBack={navigation.canGoBack() ? () => navigation.goBack() : undefined}
         actions={[
           { key: 'report', icon: 'bar-chart-outline', onPress: () => navigation.navigate(SCREENS.SALES_REPORT) },
           { key: 'add',    icon: 'add',               onPress: () => navigation.navigate(SCREENS.SALES_ENTRY) },
@@ -201,6 +204,11 @@ function SaleDetailModal({ visible, saleId, onClose }) {
               {sale.sale_status ? (
                 <View style={{ marginTop: 8, alignSelf: 'flex-start' }}>
                   <ErpBadge label={sale.sale_status} {...sMeta} />
+                </View>
+              ) : null}
+              {sale.sales_staff_name ? (
+                <View style={{ marginTop: 10 }}>
+                  <ErpInfoRow label="Sales staff" value={sale.sales_staff_name} last />
                 </View>
               ) : null}
             </ErpCard>

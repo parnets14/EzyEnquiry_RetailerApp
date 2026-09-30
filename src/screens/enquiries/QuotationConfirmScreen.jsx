@@ -66,7 +66,7 @@ export default function QuotationConfirmScreen({ navigation, route }) {
   if (loading) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
+        <StatusBar barStyle="light-content" backgroundColor={Colors.secondary} />
         <AppHeader title="Confirm Order" showBack onBack={() => navigation.goBack()} centerTitle />
         <View style={styles.center}><ActivityIndicator color={Colors.primary} /></View>
       </SafeAreaView>
@@ -76,7 +76,7 @@ export default function QuotationConfirmScreen({ navigation, route }) {
   if (!offer) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
+        <StatusBar barStyle="light-content" backgroundColor={Colors.secondary} />
         <AppHeader title="Confirm Order" showBack onBack={() => navigation.goBack()} centerTitle />
         <View style={styles.center}>
           <Ionicons name="alert-circle-outline" size={40} color={Colors.textTertiary} />
@@ -88,7 +88,7 @@ export default function QuotationConfirmScreen({ navigation, route }) {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
+      <StatusBar barStyle="light-content" backgroundColor={Colors.secondary} />
       <AppHeader title="Confirm Order" showBack onBack={() => navigation.goBack()} centerTitle />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>

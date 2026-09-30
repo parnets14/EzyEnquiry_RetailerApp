@@ -1,11 +1,11 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { authApi, session, setUnauthorizedHandler } from '../utils/api';
+import { authApi, session, setUnauthorizedHandler, warmUp } from '../utils/api';
 import {
   requestPermission,
   registerFcmToken,
   clearFcmToken,
   createNotificationChannels,
-} from '../services/notificationService';
+} from '../services/pushNotificationService';
 
 /**
  * AuthContext — single source of truth for the logged-in user.
@@ -24,6 +24,11 @@ export function AuthProvider({ children }) {
 
   // Load cached user, then refresh from server
   useEffect(() => {
+    // Kick the Render backend awake immediately. Free instances cold-start in
+    // 30-60 s; doing this now means the first real request (usually login OTP)
+    // hits a warm server instead of stalling. Fire-and-forget — never blocks.
+    warmUp();
+
     (async () => {
       try {
         const cached = await session.getUser();
@@ -66,7 +71,11 @@ export function AuthProvider({ children }) {
         if (granted) await registerFcmToken();
       } catch { /* non-fatal */ }
     })();
-  }, [user?._id]);
+  }, [user?._id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ^ Deliberately keyed on the id, not the whole `user` object. `user` is
+  // replaced on every refresh()/setUser, so depending on it would re-run this
+  // effect on each state update and re-prompt for notification permission and
+  // re-register the FCM token. Only a change of identity should re-register.
 
   // Called by Login / OTP screens after session.save
   const setUser = useCallback((u) => setUserState(u), []);

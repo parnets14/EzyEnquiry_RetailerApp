@@ -68,24 +68,20 @@ const CARD_SHADOW = {
  * full wholesaler module map before every module screen exists.
  */
 const READY_ROUTES = new Set([
-  SCREENS.SEARCH, SCREENS.SEARCH_RESULTS, SCREENS.ADD_PRODUCT, SCREENS.CATEGORIES_BRANDS,
+  SCREENS.SEARCH, SCREENS.ADD_PRODUCT, SCREENS.CATEGORIES_BRANDS,
   SCREENS.MY_PRODUCTS, SCREENS.PRODUCT_DETAILS,
-  SCREENS.ENQUIRIES, SCREENS.ENQUIRY_DETAILS, SCREENS.CREATE_ENQUIRY, SCREENS.NEGOTIATION,
-  // NOTE: QUOTATION_DETAILS / PAYMENTS / PAYMENT are deliberately absent — the
-  // constants exist but no screen is registered for them, and nothing navigates
-  // to them. Listing them here would claim a route is "ready" when it isn't.
-  SCREENS.QUOTATIONS, SCREENS.QUOTATION_CONFIRM,
-  SCREENS.ORDERS, SCREENS.ORDER_DETAILS, SCREENS.ORDER_TRACKING, SCREENS.DISPATCH_DETAILS,
+  SCREENS.ENQUIRIES, SCREENS.ENQUIRY_DETAILS,
+  SCREENS.ORDERS, SCREENS.ORDER_DETAILS,
   SCREENS.INVOICES, SCREENS.INVOICE_DETAILS,
-  SCREENS.NOTIFICATIONS, SCREENS.NOTIFICATION_SETTINGS,
+  SCREENS.NOTIFICATIONS,
   SCREENS.STAFF_LIST, SCREENS.STAFF_ADD_EDIT,
-  SCREENS.COMPANY_DETAILS, SCREENS.DOCUMENTS, SCREENS.SUBSCRIPTION, SCREENS.HELP_SUPPORT,
-  SCREENS.CHANGE_PASSWORD, SCREENS.PROFILE,
+  SCREENS.SUBSCRIPTION,
+  SCREENS.PROFILE,
   SCREENS.SALES_LIST, SCREENS.SALES_ENTRY, SCREENS.SALES_REPORT,
   SCREENS.EXPENSE_LIST, SCREENS.EXPENSE_ENTRY, SCREENS.EXPENSE_REPORT,
   SCREENS.PROFIT_LOSS,
   SCREENS.INVENTORY, SCREENS.STOCK_ADJUST, SCREENS.STOCK_TRANSFER, SCREENS.WAREHOUSE_LIST,
-  SCREENS.PURCHASE_LIST, SCREENS.PURCHASE_ENTRY, SCREENS.SUPPLIER_LIST,
+  SCREENS.PURCHASE_LIST, SCREENS.PURCHASE_ENTRY,
   SCREENS.PAYMENT_RECEIVABLE, SCREENS.PAYMENT_PAYABLE, SCREENS.ACCOUNTS, SCREENS.CUSTOMER_LEDGER,
   SCREENS.CUSTOMER_LIST, SCREENS.LEAD_LIST, SCREENS.REPORT_CENTER, SCREENS.ANALYTICS,
   SCREENS.DISPATCH_TRACKING, SCREENS.DISPATCH_ENTRY,
@@ -207,9 +203,16 @@ function AlertRow({ icon, iconColor, bg, accent, title, sub, onPress }) {
 
 function EnqCard({ item, onPress, isLast }) {
   const meta = ENQ_STATUS[item.status] || ENQ_STATUS.New;
-  const code    = item.enq_code || `#${String(item._id || '').slice(-6)}`;
-  const party   = item.retailer_name || item.customer_name || 'Customer';
-  const product = item.product_name || item.product_code || 'Product';
+  // The dashboard payload may carry a wholesaler-shaped (flat) enquiry OR the
+  // retailer's own nested DTO — accept both. `enq_code`/`retailer_name`/…
+  // exist only on the flat shape; the retailer's `enquiryResponse` sends
+  // `enquiry_code`, `product{}`, `customer{}`, `seller{}` and `id`.
+  const id      = item.id || item._id;
+  const code    = item.enq_code || item.enquiry_code || `#${String(id || '').slice(-6)}`;
+  const party   = item.retailer_name || item.customer_name
+                || item.customer?.name || item.seller?.name || 'Customer';
+  const product = item.product_name || item.product_code
+                || item.product?.name || item.product?.code || 'Product';
   const qty     = item.qty ?? item.quantity ?? 0;
 
   return (
@@ -335,7 +338,7 @@ export default function HomeScreen({ navigation }) {
     { icon: 'add-circle-outline', color: ORANGE,    bg: ORANGE_LT,         label: 'Add Product',   module: 'products',  screen: SCREENS.ADD_PRODUCT },
     { icon: 'arrow-undo-outline', color: '#2563EB', bg: '#EFF6FF',         label: 'Reply Enquiry', module: 'enquiries', screen: SCREENS.ENQUIRIES },
     { icon: 'cart-outline',       color: '#059669', bg: '#ECFDF5',         label: 'New Sale',      module: 'sales',     screen: SCREENS.SALES_ENTRY },
-    { icon: 'archive-outline',    color: '#7C3AED', bg: '#F5F3FF',         label: 'Stock Entry',   module: 'inventory', screen: SCREENS.STOCK_ADJUST },
+    { icon: 'archive-outline',    color: '#7C3AED', bg: '#F5F3FF',         label: 'Stock Entry',   module: 'inventory', screen: SCREENS.STOCK_ADJUST, params: { mode: 'in' } },
   ].filter(a => can(a.module));
 
   /* ── Module map (grouped, exactly like the wholesaler dashboard) ── */
@@ -347,14 +350,11 @@ export default function HomeScreen({ navigation }) {
       // Invoices deliberately NOT here — the wholesaler keeps it in the Finance
       // group, so listing it in both places duplicated the tile.
       //
-      // Quotes was REMOVED (2026-09-29) to match the wholesaler. It was a
-      // duplicate, not a loss: `EnquiriesScreen` is itself titled
-      // "My Quotations" and both screens call the same `enquiryApi.list()` and
-      // render the same enquiry records. The wholesaler has no Quotes tile and
-      // nothing navigates to its QuotationListScreen either.
-      // `QuotationsScreen` + `SCREENS.QUOTATIONS` are left registered in
-      // AppNavigator so the route still works if deep-linked, but the dashboard
-      // no longer surfaces a second entry point to the same data.
+      // A "Sell Orders" tile (→ ORDER_FULFILMENT) used to sit between Orders and
+      // Dispatch. It was REMOVED 2026-09-30: the wholesaler has no such tile, and
+      // the two screens behind it (OrderFulfilmentScreen / OrderPackScreen) have
+      // no wholesaler twin either. This group is now tile-for-tile identical to
+      // the wholesaler's.
       title: 'Marketplace',
       items: [
         { icon: 'cube-outline',                 iconColor: ORANGE,    bg: ORANGE_LT,  label: 'Products',  module: 'products',  screen: SCREENS.MY_PRODUCTS },
@@ -508,18 +508,30 @@ export default function HomeScreen({ navigation }) {
               </View>
             </View>
 
-            <TouchableOpacity
-              style={st.bell}
-              onPress={() => go(SCREENS.NOTIFICATIONS)}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="notifications-outline" size={21} color="#FFFFFF" />
-              {unread > 0 && (
-                <View style={st.bellDot}>
-                  <Text style={st.bellDotTxt}>{unread > 9 ? '9+' : unread}</Text>
-                </View>
-              )}
-            </TouchableOpacity>
+            {/* Search is no longer a bottom tab (wholesaler parity — its tabs are
+                Home/Enquiries/Products/Sales/Profile), so it is reached from here. */}
+            <View style={st.headerActions}>
+              <TouchableOpacity
+                style={[st.bell, st.bellNoMargin]}
+                onPress={() => go(SCREENS.SEARCH)}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="search-outline" size={21} color="#FFFFFF" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={st.bell}
+                onPress={() => go(SCREENS.NOTIFICATIONS)}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="notifications-outline" size={21} color="#FFFFFF" />
+                {unread > 0 && (
+                  <View style={st.bellDot}>
+                    <Text style={st.bellDotTxt}>{unread > 9 ? '9+' : unread}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
 
           <View style={st.dateRow}>
@@ -597,7 +609,10 @@ export default function HomeScreen({ navigation }) {
                   key={a.label}
                   {...a}
                   soon={!READY_ROUTES.has(a.screen)}
-                  onPress={() => go(a.screen)}
+                  // `params` (when present) preselects a mode — the Stock Entry tile
+                  // opens the form with Stock In already chosen, like the wholesaler's
+                  // dashboard tile (`navigate('StockAdjust', { mode: 'in' })`).
+                  onPress={() => go(a.screen, a.params)}
                 />
               ))}
             </View>
@@ -615,7 +630,7 @@ export default function HomeScreen({ navigation }) {
                     key={action.label}
                     {...action}
                     soon={!READY_ROUTES.has(action.screen)}
-                    onPress={() => go(action.screen)}
+                    onPress={() => go(action.screen, action.params)}
                   />
                 ))}
               </View>
@@ -688,7 +703,7 @@ export default function HomeScreen({ navigation }) {
                   key={item._id || item.id || idx}
                   item={item}
                   isLast={idx === arr.length - 1}
-                  onPress={() => go(SCREENS.ENQUIRY_DETAILS, { enquiryId: item._id || item.id })}
+                  onPress={() => go(SCREENS.ENQUIRY_DETAILS, { enquiryId: item.id || item._id })}
                 />
               ))
             )}
@@ -743,7 +758,9 @@ const st = StyleSheet.create({
   compBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(255,255,255,0.16)', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2, marginTop: 6, alignSelf: 'flex-start', maxWidth: '100%' },
   compText: { fontSize: 9.5, fontWeight: '700', color: '#FFF' },
 
+  headerActions: { flexDirection: 'row', alignItems: 'center' },
   bell: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', marginLeft: 12 },
+  bellNoMargin: { marginLeft: 0 },
   bellDot: { position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, borderRadius: 9, backgroundColor: ORANGE, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: NAVY, paddingHorizontal: 3 },
   bellDotTxt: { fontSize: 8.5, fontWeight: '800', color: '#FFF' },
 

@@ -18,6 +18,10 @@
  * The backend accepts either `items[]` (multi-line) or a flat `{qty, rate}` —
  * the wholesaler uses the flat form, so we do too. One product per record.
  *
+ * Route params: `{ product }` is optional. The Product Details screen's "Buy Item"
+ * button passes it so the product arrives pre-selected; opening this screen any
+ * other way leaves the form blank.
+ *
  * Note: the retailer's `myProductApi.list()` IS its catalog (the wholesaler's
  * items live in a separate admin catalog, hence its `listCatalog` call).
  */
@@ -39,7 +43,29 @@ import {
 const numOnly = v => String(v ?? '').replace(/[^0-9.]/g, '');
 const todayIsoOf = () => new Date().toISOString().slice(0, 10);
 
-export default function PurchaseEntryScreen({ navigation }) {
+/* Accepts either shape that can arrive in `route.params.product`:
+ *   - a mapped marketplace product — `{ id, productCode, name, _raw }` (what the
+ *     Product Details screen holds after `mapMarketplaceProduct`), or
+ *   - a raw catalog row — `{ _id, code, name, purchase_price }` (what the in-screen
+ *     picker holds).
+ * Returns null when there is nothing usable, so the caller can no-op. */
+function normalizeIncomingProduct(p) {
+  if (!p) return null;
+  const raw = p._raw || p;
+  const id = p.id || raw._id || raw.id;
+  if (!id) return null;
+  return {
+    id,
+    code: p.productCode || raw.code || '',
+    name: p.name || raw.name || '',
+    gst: raw.gst_percent ?? p.gstPercent ?? 18,
+    // The marketplace DTO deliberately hides seller cost, so this is usually
+    // empty and the user types the rate in. Only a raw catalog row carries one.
+    rate: raw.purchase_price || raw.purchase_rate || raw.cost_price || '',
+  };
+}
+
+export default function PurchaseEntryScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
 
   const [saving, setSaving] = useState(false);
@@ -64,6 +90,24 @@ export default function PurchaseEntryScreen({ navigation }) {
   });
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  /* Auto-select the product when this screen is opened from a product detail page
+   * — "Buy Item" there passes `route.params.product`, so the user lands here with
+   * the product already filled in instead of having to search the catalog again.
+   * Opening this screen from anywhere else (e.g. the purchase list FAB) passes no
+   * params and the form stays blank, exactly as before. */
+  useEffect(() => {
+    const incoming = normalizeIncomingProduct(route.params?.product);
+    if (!incoming) return;
+    setForm(f => ({
+      ...f,
+      product_id:   incoming.id,
+      product_code: incoming.code,
+      product_name: incoming.name,
+      gst_percent:  String(incoming.gst ?? 18),
+      rate: incoming.rate !== '' && incoming.rate != null ? String(incoming.rate) : f.rate,
+    }));
+  }, [route.params?.product]);
 
   /* Load the catalog lazily on first picker open (the wholesaler loads eagerly,
    * but the retailer's list call is heavier — same result, one less startup call). */

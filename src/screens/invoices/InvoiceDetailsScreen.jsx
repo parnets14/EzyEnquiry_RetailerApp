@@ -1,9 +1,45 @@
-import React, { useState, useEffect, useCallback } from 'react';
+/**
+ * src/screens/invoices/InvoiceDetailsScreen.jsx  (Retailer app)
+ *
+ * Structural parity with the wholesaler's `invoice/InvoiceDetailScreen.jsx`:
+ *   [ branded sheet: logo + EazyEnquiry wordmark | INVOICE + no + payment badge ]
+ *   [ ──── orange rule ──── ]
+ *   [ BILLED TO box              | DETAILS box                            ]
+ *   [ navy table head: ITEM · QTY · RATE · AMOUNT + item row               ]
+ *   [ right-aligned totals: Subtotal / GST / Grand Total / Paid / Balance  ]
+ *   [ footnote                                                             ]
+ *   [ bottom action bar (absolute) ]
+ *
+ * ── Deliberate deviations from the wholesaler, and why ───────────────────────
+ *
+ * 1. FIELD MAPPING. The wholesaler reads `invoice.items[]` and `invoice.company`
+ *    because its backend returns those. The retailer's `retailerInvoiceResponse`
+ *    (backend/src/controllers/Retailer Management/retailerMarketplaceController.js)
+ *    returns NEITHER: it flattens the invoice to a single product
+ *    (`product_name`, `qty`, `unit`, `unit_price`, `amount`) and exposes
+ *    `retailer` / `created_by` / `customer` blocks instead. A literal copy of the
+ *    wholesaler's JSX would render "No items" and "—" everywhere, so the same
+ *    layout is bound to the fields that actually exist.
+ *
+ * 2. HEADER. Uses this app's `AppHeader` (same as the rewritten InvoicesScreen)
+ *    rather than the wholesaler's inline header, so the two apps don't look like
+ *    two different products stitched together.
+ *
+ * 3. BOTTOM BAR. Same as the wholesaler's: "Download Invoice", which renders the
+ *    branded sheet to a PDF and opens the native share/save sheet. Uses
+ *    `src/utils/invoicePdf.js` — the same template as the wholesaler's, fed from
+ *    the retailer's DTO fields.
+ *
+ * Removed from the previous version (dead code — the retailer DTO never returns
+ * these): the "Payment" InfoCard (`payment_method` / `paid_at`), the
+ * "Linked Dispatch" InfoCard (`dispatch`), and the `docMetaGrid` order-ref link.
+ */
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, StatusBar, TouchableOpacity,
-  ActivityIndicator, RefreshControl,
+  ActivityIndicator, Alert, Image, ScrollView, StatusBar,
+  StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { Colors } from '../../theme/colors';
 import { Typography } from '../../theme/typography';
@@ -13,35 +49,77 @@ import StatusBadge from '../../components/common/StatusBadge';
 import { formatDate, formatCurrency } from '../../utils/formatters';
 import { invoiceApi } from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
-import { SCREENS } from '../../constants';
+import { generateAndShareInvoice } from '../../utils/invoicePdf';
+
+const LOGO = require('../../assets/logo.jpeg');
 
 export default function InvoiceDetailsScreen({ navigation, route }) {
-  const { invoiceId } = route.params || {};
+  const insets = useSafeAreaInsets();
+  const { invoiceId, invoice: passed } = route.params || {};
   const { user } = useAuth();
 
-  const [invoice, setInvoice]   = useState(null);
-  const [loading, setLoading]   = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [invoice, setInvoice]   = useState(passed || null);
+  const [loading, setLoading]   = useState(!passed);
   const [error, setError]       = useState('');
+  const [downloading, setDownloading] = useState(false);
 
   const load = useCallback(async () => {
-    if (!invoiceId) return;
+    if (!invoiceId && !passed?.id) { setLoading(false); return; }
     setError('');
     try {
-      const data = await invoiceApi.get(invoiceId);
+      const data = await invoiceApi.get(invoiceId || passed.id);
       setInvoice(data);
     } catch (err) {
+      // Keep whatever we were handed so the sheet still renders something.
       setError(err.message || 'Could not load invoice.');
+    } finally {
+      setLoading(false);
     }
-  }, [invoiceId]);
+  }, [invoiceId, passed]);
 
-  useEffect(() => { (async () => { setLoading(true); await load(); setLoading(false); })(); }, [load]);
-  const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
+  useEffect(() => { load(); }, [load]);
 
-  if (loading) {
+  // The DTO flattens to one product, but stay tolerant of an `items[]` array in
+  // case the backend starts returning one (listOrderInvoices already selects it).
+  const rawItems = Array.isArray(invoice?.items) && invoice.items.length
+    ? invoice.items
+    : [{
+        product_name: invoice?.product_name || invoice?.product?.name,
+        product_code: invoice?.product?.code,
+        qty: invoice?.qty,
+        unit: invoice?.unit,
+        rate: invoice?.unit_price,
+        total: invoice?.amount,
+      }].filter((it) => it.product_name || it.qty);
+
+  const subtotal = Number(invoice?.subtotal ?? invoice?.amount ?? 0);
+  const gst      = Number(invoice?.gst_amount || 0);
+  const other    = Number(invoice?.charges?.other || 0);
+  const discount = Number(invoice?.discount_amount || 0);
+  const grand    = Number(invoice?.grand_total ?? invoice?.total_amount ?? 0);
+  const paid     = Number(invoice?.paid_amount || 0);
+  const balance  = Number(invoice?.balance_due ?? Math.max(grand - paid, 0));
+  const paymentStatus = invoice?.payment_status || 'Unpaid';
+
+  const onDownload = async () => {
+    if (!invoice) return;
+    setDownloading(true);
+    try {
+      await generateAndShareInvoice(invoice);
+    } catch (e) {
+      // A dismissed share sheet is not an error worth alerting about.
+      if (e?.message && !/dismiss|cancel/i.test(e.message)) {
+        Alert.alert('Download failed', e.message);
+      }
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  if (loading && !invoice) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
+        <StatusBar barStyle="light-content" backgroundColor={Colors.secondary} />
         <AppHeader title="Invoice" showBack onBack={() => navigation.goBack()} centerTitle variant="primary" />
         <View style={styles.center}><ActivityIndicator color={Colors.primary} /></View>
       </SafeAreaView>
@@ -51,33 +129,35 @@ export default function InvoiceDetailsScreen({ navigation, route }) {
   if (!invoice) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
+        <StatusBar barStyle="light-content" backgroundColor={Colors.secondary} />
         <AppHeader title="Invoice" showBack onBack={() => navigation.goBack()} centerTitle variant="primary" />
         <View style={styles.center}>
           <Ionicons name="receipt-outline" size={40} color={Colors.textTertiary} />
           <Text style={styles.errorTextFull}>{error || 'Invoice not available yet.'}</Text>
-          <TouchableOpacity onPress={onRefresh}><Text style={styles.retryText}>Retry</Text></TouchableOpacity>
+          <TouchableOpacity onPress={load}><Text style={styles.retryText}>Retry</Text></TouchableOpacity>
         </View>
       </SafeAreaView>
     );
   }
 
-  const paymentStatus = invoice.payment_status || 'Pending';
-  const isPaid = paymentStatus === 'Paid';
-  const charges = (invoice.charges?.transport || 0) + (invoice.charges?.packing || 0) + (invoice.charges?.other || 0);
-  const paidAmount = Number(invoice.paid_amount || 0);
-  const totalAmount = Number(invoice.total_amount || invoice.amount || 0);
-  const due = Math.max(totalAmount - paidAmount, 0);
+  // BILLED TO = the retailer receiving the invoice. The retailer DTO carries the
+  // buyer's own company under `retailer`; fall back to the signed-in company.
+  const bill = invoice.retailer || {};
+  const billName    = bill.company || bill.name || user?.company?.name || user?.company_name || '—';
+  const billOwner   = bill.name && bill.company ? bill.name : (user?.owner_name || '');
+  const billMobile  = bill.mobile || user?.mobile || '';
+  const billEmail   = bill.email || user?.email || '';
+  const issuer      = invoice.created_by || {};
+  const customer    = invoice.customer || {};
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
+      <StatusBar barStyle="light-content" backgroundColor={Colors.secondary} />
       <AppHeader title="Invoice" showBack onBack={() => navigation.goBack()} centerTitle variant="primary" />
 
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[styles.scroll, { paddingBottom: 108 + insets.bottom }]}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.primary]} />}
       >
         {error ? (
           <View style={styles.errorBox}>
@@ -86,239 +166,247 @@ export default function InvoiceDetailsScreen({ navigation, route }) {
           </View>
         ) : null}
 
-        {/* ── Tax invoice document ─────────────────────────── */}
-        <View style={styles.doc}>
-          {/* Document header */}
-          <View style={styles.docHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.docBrand}>TAX INVOICE</Text>
-              <Text style={styles.docNumber}>{invoice.invoice_number || 'Invoice'}</Text>
-            </View>
-            <StatusBadge status={paymentStatus} type="payment" size="md" />
-          </View>
-
-          {/* Meta grid */}
-          <View style={styles.docMetaGrid}>
-            <DocMeta label="Date" value={formatDate(invoice.invoice_date || invoice.created_at)} />
-            <DocMeta label="Order Ref." value={invoice.order_code || '—'} onPress={() => invoice.order_id && navigation.navigate(SCREENS.ORDER_DETAILS, { orderId: invoice.order_id })} />
-          </View>
-
-          {/* Customer — the end-customer this order was created for by the retailer. */}
-          <View style={styles.billTo}>
-            <Text style={styles.billToLabel}>CUSTOMER</Text>
-            <Text style={styles.billToName}>
-              {invoice.customer?.name || user?.company?.name || user?.company_name || 'Customer'}
-            </Text>
-            {invoice.customer?.mobile ? <Text style={styles.billToLine}>+91 {invoice.customer.mobile}</Text> : null}
-            {invoice.customer?.email ? <Text style={styles.billToLine}>{invoice.customer.email}</Text> : null}
-            {invoice.customer?.address ? <Text style={styles.billToLine}>{invoice.customer.address}</Text> : null}
-
-            {/* Created By — the person/company who generated this invoice */}
-            {(invoice.created_by?.name || invoice.created_by?.company || invoice.created_by?.mobile) ? (
-              <View style={styles.createdByBox}>
-                <Text style={styles.createdByLabel}>CREATED BY{invoice.created_by?.type ? ` (${invoice.created_by.type})` : ''}</Text>
-                {invoice.created_by?.name ? <Text style={styles.billToLine}>{invoice.created_by.name}</Text> : null}
-                {invoice.created_by?.company ? <Text style={styles.billToLine}>{invoice.created_by.company}</Text> : null}
-                {invoice.created_by?.mobile ? <Text style={styles.billToLine}>+91 {invoice.created_by.mobile}</Text> : null}
-                {invoice.created_by?.email ? <Text style={styles.billToLine}>{invoice.created_by.email}</Text> : null}
+        {/* ── Branded invoice sheet ─────────────────────────────── */}
+        <View style={styles.sheet}>
+          <View style={styles.brandRow}>
+            <View style={styles.brandLeft}>
+              <Image source={LOGO} style={styles.logo} resizeMode="contain" />
+              <View style={styles.brandText}>
+                <Text style={styles.brandName}>
+                  Eazy<Text style={styles.brandNameAccent}>Enquiry</Text>
+                </Text>
+                <Text style={styles.brandTag}>Wholesale &amp; Trade Platform</Text>
               </View>
-            ) : null}
+            </View>
+            <View style={styles.brandRight}>
+              <Text style={styles.invWord}>INVOICE</Text>
+              <Text style={styles.invNo} numberOfLines={1}>{invoice.invoice_number || '—'}</Text>
+              <StatusBadge status={paymentStatus} type="payment" />
+            </View>
+          </View>
+
+          <View style={styles.rule} />
+
+          {/* Billed to + details */}
+          <View style={styles.metaRow}>
+            <View style={styles.metaBox}>
+              <Text style={styles.metaHead}>BILLED TO</Text>
+              <Text style={styles.metaStrong} numberOfLines={2}>{billName}</Text>
+              {billOwner ? <Text style={styles.metaLine}>{billOwner}</Text> : null}
+              {billMobile ? <Text style={styles.metaLine}>+91 {billMobile}</Text> : null}
+              {billEmail ? <Text style={styles.metaLine}>{billEmail}</Text> : null}
+              {customer.name ? (
+                <Text style={styles.metaLine}>
+                  For: <Text style={styles.b}>{customer.name}</Text>
+                </Text>
+              ) : null}
+            </View>
+
+            <View style={styles.metaBox}>
+              <Text style={styles.metaHead}>DETAILS</Text>
+              {invoice.order_code ? (
+                <Text style={styles.metaLine}>Order: <Text style={styles.b}>{invoice.order_code}</Text></Text>
+              ) : null}
+              <Text style={styles.metaLine}>
+                Date: <Text style={styles.b}>{formatDate(invoice.invoice_date || invoice.created_at)}</Text>
+              </Text>
+              <Text style={styles.metaLine}>
+                Status: <Text style={styles.b}>{paymentStatus}</Text>
+              </Text>
+              {issuer.company || issuer.name ? (
+                <Text style={styles.metaLine} numberOfLines={2}>
+                  Issued by: <Text style={styles.b}>{issuer.company || issuer.name}</Text>
+                </Text>
+              ) : null}
+            </View>
           </View>
 
           {/* Items table */}
           <View style={styles.tableHead}>
-            <Text style={[styles.tHead, styles.colItem]}>ITEM</Text>
-            <Text style={[styles.tHead, styles.colQty]}>QTY</Text>
-            <Text style={[styles.tHead, styles.colRate]}>RATE</Text>
-            <Text style={[styles.tHead, styles.colAmt]}>AMOUNT</Text>
+            <Text style={[styles.th, styles.colItem]}>ITEM</Text>
+            <Text style={[styles.th, styles.colQty, styles.tRight]}>QTY</Text>
+            <Text style={[styles.th, styles.colRate, styles.tRight]}>RATE</Text>
+            <Text style={[styles.th, styles.colAmt, styles.tRight]}>AMOUNT</Text>
           </View>
-          <View style={styles.tableRow}>
-            <View style={[styles.colItem, styles.itemCell]}>
-              <Text style={styles.itemName} numberOfLines={2}>{invoice.product_name || invoice.product?.name || 'Item'}</Text>
-              {invoice.dispatch_code ? <Text style={styles.itemSub}>From {invoice.dispatch_code}</Text> : null}
+
+          {rawItems.length === 0 ? (
+            <Text style={styles.noItems}>No items on this invoice.</Text>
+          ) : rawItems.map((it, i) => (
+            <View key={i} style={styles.tr}>
+              <View style={[styles.colItem, styles.itemCell]}>
+                <Text style={styles.itemName} numberOfLines={2}>{it.product_name || 'Item'}</Text>
+                {it.product_code ? <Text style={styles.itemSub}>{it.product_code}</Text> : null}
+                {(it.size || it.finish || it.color) ? (
+                  <Text style={styles.itemSub}>
+                    {[it.size, it.finish, it.color].filter(Boolean).join(' · ')}
+                  </Text>
+                ) : null}
+              </View>
+              <Text style={[styles.td, styles.colQty, styles.tRight]}>
+                {it.qty || 0} {it.unit || ''}
+              </Text>
+              <Text style={[styles.td, styles.colRate, styles.tRight]}>{formatCurrency(it.rate)}</Text>
+              <Text style={[styles.td, styles.colAmt, styles.tRight, styles.itemAmt]}>
+                {formatCurrency(it.total)}
+              </Text>
             </View>
-            <Text style={[styles.tCell, styles.colQty]}>{invoice.qty || 0} {invoice.unit || ''}</Text>
-            <Text style={[styles.tCell, styles.colRate]}>{formatCurrency(invoice.unit_price)}</Text>
-            <Text style={[styles.tCell, styles.colAmt, styles.itemAmt]}>{formatCurrency(invoice.amount)}</Text>
-          </View>
+          ))}
 
           {/* Totals */}
-          <View style={styles.totalsBlock}>
-            <View style={styles.tRow}>
-              <Text style={styles.tLabel}>Subtotal</Text>
-              <Text style={styles.tValue}>{formatCurrency(invoice.amount)}</Text>
-            </View>
-            {invoice.gst_amount != null ? (
-              <View style={styles.tRow}>
-                <Text style={styles.tLabel}>GST{invoice.gst_percent ? ` (${invoice.gst_percent}%)` : ''}</Text>
-                <Text style={styles.tValue}>{formatCurrency(invoice.gst_amount)}</Text>
+          <View style={styles.totalsWrap}>
+            <View style={styles.totals}>
+              <SumRow label="Subtotal" value={formatCurrency(subtotal)} />
+              <SumRow label="GST" value={formatCurrency(gst)} />
+              {other > 0 ? <SumRow label="Other charges" value={formatCurrency(other)} /> : null}
+              {discount > 0 ? <SumRow label="Discount" value={`- ${formatCurrency(discount)}`} /> : null}
+
+              <View style={styles.grandRow}>
+                <Text style={styles.grandLabel}>Grand Total</Text>
+                <Text style={styles.grandValue}>{formatCurrency(grand)}</Text>
               </View>
-            ) : null}
-            {charges > 0 && (
-              <View style={styles.tRow}>
-                <Text style={styles.tLabel}>Delivery charges</Text>
-                <Text style={styles.tValue}>{formatCurrency(charges)}</Text>
-              </View>
-            )}
-            <View style={styles.grandRow}>
-              <Text style={styles.grandLabel}>Grand Total</Text>
-              <Text style={styles.grandValue}>{formatCurrency(totalAmount)}</Text>
+
+              <SumRow label="Paid" value={formatCurrency(paid)} />
+              <SumRow label="Balance Due" value={formatCurrency(balance)} strong danger={balance > 0} />
             </View>
           </View>
 
-          {/* Amount due strip */}
-          <View style={[styles.dueStrip, isPaid && styles.dueStripPaid]}>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.dueLabel, isPaid && styles.dueLabelPaid]}>{isPaid ? 'AMOUNT PAID' : 'AMOUNT DUE'}</Text>
-              <Text style={styles.dueSub}>Paid {formatCurrency(paidAmount)} of {formatCurrency(totalAmount)}</Text>
-            </View>
-            <Text style={[styles.dueValue, isPaid && styles.dueValuePaid]} numberOfLines={1}>
-              {formatCurrency(isPaid ? totalAmount : due)}
-            </Text>
-          </View>
+          <Text style={styles.footNote}>
+            Computer-generated invoice from EazyEnquiry. Thank you for your business.
+          </Text>
         </View>
-
-        {/* Payment method/date — only when there's something to show */}
-        {(invoice.payment_method || invoice.paid_at) ? (
-          <InfoCard title="Payment">
-            {invoice.payment_method ? <Row label="Method" value={invoice.payment_method} /> : null}
-            {invoice.paid_at ? <Row label="Paid On" value={formatDate(invoice.paid_at)} /> : null}
-          </InfoCard>
-        ) : null}
-
-        {/* Linked Dispatch */}
-        {invoice.dispatch ? (
-          <InfoCard title="Linked Dispatch">
-            {invoice.dispatch.dispatch_code ? <Row label="Dispatch Code" value={invoice.dispatch.dispatch_code} /> : null}
-            {invoice.dispatch.status ? <Row label="Status" value={invoice.dispatch.status.replace(/_/g, ' ')} /> : null}
-            {invoice.dispatch.driver_name ? <Row label="Driver" value={invoice.dispatch.driver_name} /> : null}
-            {invoice.dispatch.driver_mobile ? <Row label="Driver Mobile" value={invoice.dispatch.driver_mobile} /> : null}
-            {invoice.dispatch.vehicle_number ? <Row label="Vehicle" value={invoice.dispatch.vehicle_number} /> : null}
-            {invoice.dispatch.transport_name ? <Row label="Transport" value={invoice.dispatch.transport_name} /> : null}
-            {invoice.dispatch.lr_number ? <Row label="LR Number" value={invoice.dispatch.lr_number} /> : null}
-            {invoice.dispatch.dispatch_date ? <Row label="Dispatch Date" value={formatDate(invoice.dispatch.dispatch_date)} /> : null}
-            {invoice.dispatch.expected_delivery ? <Row label="Expected Delivery" value={formatDate(invoice.dispatch.expected_delivery)} /> : null}
-            {invoice.dispatch.delivered_date ? <Row label="Delivered" value={formatDate(invoice.dispatch.delivered_date)} /> : null}
-            {invoice.dispatch.notes ? <Row label="Notes" value={invoice.dispatch.notes} /> : null}
-          </InfoCard>
-        ) : null}
-
-        {isPaid ? (
-          <View style={styles.paidBanner}>
-            <Ionicons name="checkmark-circle" size={20} color={Colors.success} />
-            <Text style={styles.paidText}>This invoice has been paid in full.</Text>
-          </View>
-        ) : null}
       </ScrollView>
+
+      {/* Bottom action bar — mirrors the wholesaler's */}
+      <View style={[styles.actionBar, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+        <TouchableOpacity
+          style={[styles.actionBtn, downloading && styles.actionBtnOff]}
+          onPress={onDownload}
+          disabled={downloading}
+          activeOpacity={0.9}
+        >
+          {downloading ? (
+            <ActivityIndicator size="small" color={Colors.white} />
+          ) : (
+            <Ionicons name="download-outline" size={19} color={Colors.white} />
+          )}
+          <Text style={styles.actionBtnText}>{downloading ? 'Preparing…' : 'Download Invoice'}</Text>
+        </TouchableOpacity>
+      </View>
     </SafeAreaView>
   );
 }
 
-const InfoCard = ({ title, children }) => (
-  <View style={styles.card}>
-    <View style={styles.cardHeader}>
-      <View style={styles.cardBar} />
-      <Text style={styles.cardTitle}>{title}</Text>
-    </View>
-    {children}
+const SumRow = ({ label, value, strong, danger }) => (
+  <View style={styles.sumRow}>
+    <Text style={[styles.sumLabel, strong && styles.sumLabelStrong]}>{label}</Text>
+    <Text style={[styles.sumValue, strong && styles.sumValueStrong, danger && styles.sumDanger]}>
+      {value}
+    </Text>
   </View>
 );
-
-const Row = ({ label, value, valueStyle }) => (
-  <View style={styles.row}>
-    <Text style={styles.rowLabel}>{label}</Text>
-    <Text style={[styles.rowValue, valueStyle]} numberOfLines={2}>{value}</Text>
-  </View>
-);
-
-const DocMeta = ({ label, value, onPress }) => {
-  const content = (
-    <>
-      <Text style={styles.docMetaLabel}>{label}</Text>
-      <Text style={[styles.docMetaValue, onPress && value !== '—' && styles.docMetaLink]} numberOfLines={1}>{value}</Text>
-    </>
-  );
-  if (onPress && value !== '—') {
-    return <TouchableOpacity style={styles.docMetaItem} onPress={onPress}>{content}</TouchableOpacity>;
-  }
-  return <View style={styles.docMetaItem}>{content}</View>;
-};
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
-  scroll: { padding: Spacing.screenPadding, paddingBottom: 40, gap: 12 },
+  scroll: { padding: Spacing.md, paddingBottom: 40 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24 },
   errorTextFull: { ...Typography.body2, color: Colors.textSecondary, textAlign: 'center' },
   retryText: { ...Typography.body2, color: Colors.primary, fontWeight: '700' },
 
-  headerCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: Colors.white, borderRadius: BorderRadius.xl, padding: Spacing.base, ...Shadows.sm, borderLeftWidth: 3, borderLeftColor: Colors.secondary },
-  invNo: { ...Typography.h4, color: Colors.textPrimary },
-  invDate: { ...Typography.caption, color: Colors.textTertiary, marginTop: 2 },
-  orderLink: { ...Typography.caption, color: Colors.primary, fontWeight: '700', marginTop: 3 },
-
-  noticeBox: { flexDirection: 'row', gap: 8, alignItems: 'flex-start', backgroundColor: Colors.infoBg, borderRadius: BorderRadius.md, padding: Spacing.md },
-  noticeText: { ...Typography.caption, color: Colors.infoText, flex: 1, lineHeight: 18 },
-  errorBox: { flexDirection: 'row', gap: 8, alignItems: 'flex-start', backgroundColor: Colors.errorBg, borderRadius: BorderRadius.md, padding: Spacing.md },
+  errorBox: {
+    flexDirection: 'row', gap: 8, alignItems: 'flex-start',
+    backgroundColor: Colors.errorBg, borderRadius: BorderRadius.md,
+    padding: Spacing.md, marginBottom: Spacing.md,
+  },
   errorText: { ...Typography.caption, color: Colors.error, flex: 1 },
 
-  card: { backgroundColor: Colors.white, borderRadius: BorderRadius.xl, padding: Spacing.base, ...Shadows.sm },
-  cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.md },
-  cardBar: { width: 3, height: 16, backgroundColor: Colors.secondary, borderRadius: 2, marginRight: 8 },
-  cardTitle: { ...Typography.h5, color: Colors.textPrimary },
-  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
-  rowLabel: { ...Typography.caption, color: Colors.textSecondary, flex: 0.4 },
-  rowValue: { ...Typography.caption, color: Colors.textPrimary, fontWeight: '600', flex: 0.6, textAlign: 'right' },
-  totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: Spacing.md, marginTop: 4 },
-  totalLabel: { ...Typography.h5, color: Colors.textPrimary },
-  totalValue: { ...Typography.h4, color: Colors.primary },
+  // ── Sheet ────────────────────────────────────────────────────
+  sheet: {
+    backgroundColor: Colors.white, borderRadius: BorderRadius.xl,
+    padding: Spacing.base, ...Shadows.sm,
+  },
 
-  // Tax invoice document
-  doc: { backgroundColor: Colors.white, borderRadius: BorderRadius.xl, padding: Spacing.base, ...Shadows.sm },
-  docHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: Colors.border, paddingBottom: Spacing.md },
-  docBrand: { ...Typography.caption, color: Colors.primary, fontWeight: '800', letterSpacing: 1 },
-  docNumber: { ...Typography.h4, color: Colors.textPrimary, marginTop: 2 },
-  docMetaGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: Spacing.md },
-  docMetaItem: { width: '50%', paddingVertical: 5 },
-  docMetaLabel: { ...Typography.caption, color: Colors.textTertiary, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.3, fontWeight: '700' },
-  docMetaValue: { ...Typography.body2, color: Colors.textPrimary, fontWeight: '700', marginTop: 2 },
-  docMetaLink: { color: Colors.primary },
-  billTo: { backgroundColor: Colors.background, borderRadius: BorderRadius.md, padding: Spacing.md, marginTop: Spacing.md },
-  billToLabel: { ...Typography.caption, color: Colors.textTertiary, fontWeight: '800', letterSpacing: 0.5, fontSize: 10 },
-  billToName: { ...Typography.body1, color: Colors.textPrimary, fontWeight: '800', marginTop: 4 },
-  billToLine: { ...Typography.caption, color: Colors.textSecondary, lineHeight: 19, marginTop: 2 },
-  forCustomer: { marginTop: Spacing.sm },
-  createdByBox: { marginTop: Spacing.sm, paddingTop: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.border },
-  createdByLabel: { ...Typography.caption, color: Colors.textTertiary, fontWeight: '800', letterSpacing: 0.5, fontSize: 10, marginBottom: 2 },
-  tableHead: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: Colors.border, marginTop: Spacing.lg, paddingBottom: Spacing.sm },
-  tHead: { ...Typography.caption, color: Colors.textTertiary, fontWeight: '800', fontSize: 10, letterSpacing: 0.3 },
-  tableRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: Colors.border, paddingVertical: Spacing.md },
-  tCell: { ...Typography.caption, color: Colors.textPrimary, fontWeight: '600' },
+  brandRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  brandLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, paddingRight: Spacing.sm },
+  brandText: { flex: 1 },
+  logo: { width: 42, height: 42, borderRadius: BorderRadius.button },
+  brandName: { ...Typography.h4, color: Colors.textPrimary, fontWeight: '900' },
+  brandNameAccent: { color: Colors.primary },
+  brandTag: { ...Typography.caption, fontSize: 10, color: Colors.textSecondary, marginTop: 1 },
+  brandRight: { alignItems: 'flex-end', maxWidth: '46%' },
+  invWord: { ...Typography.h4, fontWeight: '900', letterSpacing: 2, color: Colors.textPrimary },
+  invNo: { ...Typography.caption, color: Colors.textSecondary, marginTop: 2, marginBottom: 6 },
+
+  rule: {
+    height: 3, backgroundColor: Colors.primary,
+    borderRadius: 2, marginVertical: Spacing.md + 2,
+  },
+
+  metaRow: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.base },
+  metaBox: { flex: 1, backgroundColor: Colors.background, borderRadius: BorderRadius.button, padding: Spacing.md },
+  metaHead: {
+    ...Typography.caption, fontSize: 10, letterSpacing: 1,
+    color: Colors.textSecondary, fontWeight: '800', marginBottom: 6,
+  },
+  metaStrong: { ...Typography.body2, fontWeight: '800', color: Colors.textPrimary },
+  metaLine: { ...Typography.caption, color: Colors.textPrimary, marginTop: 2, lineHeight: 18 },
+  b: { fontWeight: '700' },
+
+  // ── Items table ──────────────────────────────────────────────
+  tableHead: {
+    flexDirection: 'row', backgroundColor: Colors.secondary,
+    borderRadius: BorderRadius.md, paddingVertical: Spacing.sm, paddingHorizontal: Spacing.sm,
+  },
+  th: { color: Colors.white, fontSize: 10.5, fontWeight: '800', letterSpacing: 0.4 },
+  tRight: { textAlign: 'right' },
+  tr: {
+    flexDirection: 'row', paddingVertical: Spacing.sm + 1, paddingHorizontal: Spacing.sm,
+    borderBottomWidth: 1, borderBottomColor: Colors.borderLight, alignItems: 'flex-start',
+  },
   colItem: { flex: 1, paddingRight: Spacing.sm },
-  colQty: { width: 62, textAlign: 'center' },
-  colRate: { width: 70, textAlign: 'right' },
-  colAmt: { width: 82, textAlign: 'right' },
+  colQty: { width: 56 },
+  colRate: { width: 68 },
+  colAmt: { width: 82 },
   itemCell: { justifyContent: 'center' },
   itemName: { ...Typography.body2, color: Colors.textPrimary, fontWeight: '700' },
-  itemSub: { ...Typography.caption, color: Colors.textTertiary, marginTop: 2 },
+  itemSub: { ...Typography.caption, fontSize: 10.5, color: Colors.textTertiary, marginTop: 1 },
+  td: { ...Typography.caption, color: Colors.textPrimary, fontWeight: '600' },
   itemAmt: { fontWeight: '800' },
-  totalsBlock: { marginTop: Spacing.md },
-  tRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 },
-  tLabel: { ...Typography.caption, color: Colors.textSecondary },
-  tValue: { ...Typography.caption, color: Colors.textPrimary, fontWeight: '700' },
-  grandRow: { flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: Colors.border, marginTop: 4, paddingTop: Spacing.sm },
-  grandLabel: { ...Typography.h5, color: Colors.textPrimary },
-  grandValue: { ...Typography.h5, color: Colors.textPrimary },
-  dueStrip: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.errorBg, borderRadius: BorderRadius.md, padding: Spacing.md, marginTop: Spacing.lg },
-  dueStripPaid: { backgroundColor: Colors.successBg },
-  dueLabel: { ...Typography.caption, color: Colors.error, fontWeight: '800', letterSpacing: 0.5 },
-  dueLabelPaid: { color: Colors.successText },
-  dueSub: { ...Typography.caption, color: Colors.textSecondary, marginTop: 2 },
-  dueValue: { ...Typography.h3, color: Colors.error, marginLeft: Spacing.sm, maxWidth: '46%', textAlign: 'right' },
-  dueValuePaid: { color: Colors.successText },
+  noItems: { textAlign: 'center', color: Colors.textSecondary, padding: Spacing.base, ...Typography.caption },
 
-  actionBtn: { marginTop: 4 },
-  collectNote: { flexDirection: 'row', gap: 8, alignItems: 'flex-start', backgroundColor: Colors.background, borderRadius: BorderRadius.md, padding: Spacing.md },
-  collectText: { ...Typography.caption, color: Colors.textSecondary, flex: 1, lineHeight: 18 },
-  paidBanner: { flexDirection: 'row', gap: 8, alignItems: 'center', backgroundColor: Colors.successBg, borderRadius: BorderRadius.md, padding: Spacing.base },
-  paidText: { ...Typography.body2, color: Colors.successText, fontWeight: '600', flex: 1 },
+  // ── Totals ───────────────────────────────────────────────────
+  totalsWrap: { alignItems: 'flex-end', marginTop: Spacing.base },
+  totals: { width: '76%' },
+  sumRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 },
+  sumLabel: { ...Typography.caption, color: Colors.textSecondary, flex: 1, paddingRight: Spacing.sm },
+  sumLabelStrong: { fontWeight: '800', color: Colors.textPrimary },
+  sumValue: { ...Typography.caption, fontWeight: '700', color: Colors.textPrimary },
+  sumValueStrong: { fontSize: 14, fontWeight: '900' },
+  sumDanger: { color: Colors.error },
+  grandRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    borderTopWidth: 2, borderTopColor: Colors.secondary,
+    marginTop: 6, paddingTop: Spacing.sm,
+  },
+  grandLabel: { ...Typography.body2, fontWeight: '900', color: Colors.textPrimary },
+  grandValue: { ...Typography.h4, fontWeight: '900', color: Colors.primary },
+
+  footNote: {
+    ...Typography.caption, fontSize: 10.5, color: Colors.textTertiary, textAlign: 'center',
+    marginTop: Spacing.lg, paddingTop: Spacing.md,
+    borderTopWidth: 1, borderTopColor: Colors.borderLight,
+  },
+
+  // ── Bottom action bar ────────────────────────────────────────
+  actionBar: {
+    position: 'absolute', left: 0, right: 0, bottom: 0,
+    paddingHorizontal: Spacing.md, paddingTop: Spacing.md,
+    backgroundColor: Colors.white,
+    borderTopWidth: 1, borderTopColor: Colors.borderLight,
+  },
+  actionBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+    backgroundColor: Colors.primary, borderRadius: BorderRadius.xl, paddingVertical: 15,
+  },
+  actionBtnOff: { opacity: 0.7 },
+  actionBtnText: { color: Colors.white, ...Typography.body1, fontWeight: '800' },
 });

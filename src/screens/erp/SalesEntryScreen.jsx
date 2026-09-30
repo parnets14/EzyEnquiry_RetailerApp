@@ -19,7 +19,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { Colors } from '../../theme/colors';
-import { erpApi, myProductApi } from '../../utils/api';
+import { erpApi, myProductApi, staffApi } from '../../utils/api';
 import { formatCurrency } from '../../utils/formatters';
 import {
   ErpHeader, ErpCard, ErpSectionLabel, ErpField, ErpInput,
@@ -56,6 +56,14 @@ export default function SalesEntryScreen({ navigation }) {
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [pickerFor,      setPickerFor]      = useState(null);
   const [pickerSearch,   setPickerSearch]   = useState('');
+
+  // Sales staff assignment — mirrors the wholesaler's OrderEntry "Assign to
+  // Sales Staff". Optional: a sale saves fine without one.
+  const [staff,         setStaff]         = useState([]);
+  const [staffLoading,  setStaffLoading]  = useState(true);
+  const [staffPicker,   setStaffPicker]   = useState(false);
+  const [staffSearch,   setStaffSearch]   = useState('');
+  const [assignedStaff, setAssignedStaff] = useState(null);   // { _id, name, designation, mobile }
 
   // Load the FULL product catalogue. The backend caps listMyProducts at 100 per
   // page, so page through until a page returns fewer than the page size.
@@ -115,6 +123,27 @@ export default function SalesEntryScreen({ navigation }) {
     return () => { cancelled = true; };
   }, []);
 
+  // Load the retailer's own staff so a sale can be credited to whoever handled
+  // it. Deactivated staff are filtered out — you shouldn't be able to assign new
+  // work to someone whose login is off.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setStaffLoading(true);
+      try {
+        const res = await staffApi.list({ limit: 200 });
+        const data = res?.data ?? res;
+        const batch = Array.isArray(data) ? data : data?.staff ?? [];
+        if (!cancelled) setStaff(batch.filter(s => s.is_active !== false));
+      } catch {
+        if (!cancelled) setStaff([]);
+      } finally {
+        if (!cancelled) setStaffLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const addItem    = () => setItems(prev => [...prev, emptyItem()]);
   const removeItem = (i) => setItems(prev => (prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev));
   const updateItem = (i, key, v) => setItems(prev => prev.map((it, idx) => (idx === i ? { ...it, [key]: v } : it)));
@@ -151,6 +180,15 @@ export default function SalesEntryScreen({ navigation }) {
       (c.mobile || '').includes(q) ||
       (c.gst_number || '').toLowerCase().includes(q));
   }, [customers, customerSearch]);
+
+  const filteredStaff = useMemo(() => {
+    const q = staffSearch.trim().toLowerCase();
+    if (!q) return staff;
+    return staff.filter(s =>
+      (s.name || '').toLowerCase().includes(q) ||
+      (s.mobile || '').includes(q) ||
+      (s.designation || '').toLowerCase().includes(q));
+  }, [staff, staffSearch]);
 
   // ── Totals (identical maths to the wholesaler form) ──
   let subtotal = 0;
@@ -189,6 +227,8 @@ export default function SalesEntryScreen({ navigation }) {
         discount_percent: discPct,
         discount:         discAmt,
         date:             new Date().toISOString(),
+        // Optional — the backend validates this against the company's own staff.
+        ...(assignedStaff ? { sales_staff_id: assignedStaff._id, sales_staff_name: assignedStaff.name } : {}),
       });
       Alert.alert('Sale recorded', 'The sale has been saved.', [
         { text: 'OK', onPress: () => navigation.goBack() },
@@ -280,6 +320,32 @@ export default function SalesEntryScreen({ navigation }) {
                 placeholder="0"
               />
             </ErpField>
+          </ErpCard>
+
+          <ErpCard>
+            <ErpField label="Assign to Sales Staff">
+              <TouchableOpacity
+                style={[st.pickBtn, !assignedStaff && st.pickBtnEmpty]}
+                onPress={() => { setStaffPicker(true); setStaffSearch(''); }}
+                activeOpacity={0.8}>
+                <Text style={[st.pickTxt, !assignedStaff && st.pickTxtEmpty]} numberOfLines={1}>
+                  {assignedStaff ? assignedStaff.name : 'Tap to assign a staff member…'}
+                </Text>
+                <Ionicons name="chevron-down" size={16} color={ERP.faint} />
+              </TouchableOpacity>
+            </ErpField>
+            {assignedStaff ? (
+              <TouchableOpacity
+                style={st.removeBtn}
+                onPress={() => setAssignedStaff(null)}
+                activeOpacity={0.8}>
+                <Ionicons name="close-circle-outline" size={14} color={Colors.error} />
+                <Text style={st.removeTxt}>Clear assignment</Text>
+              </TouchableOpacity>
+            ) : null}
+            <Text style={st.pickMeta}>
+              Who handled this sale. Optional — leave blank for a counter sale.
+            </Text>
           </ErpCard>
 
           <ErpCard>
@@ -399,6 +465,63 @@ export default function SalesEntryScreen({ navigation }) {
           </View>
         </View>
       </Modal>
+
+      {/* ── Sales staff picker sheet ── */}
+      <Modal visible={staffPicker} animationType="slide" transparent onRequestClose={() => setStaffPicker(false)}>
+        <View style={st.overlay}>
+          <TouchableOpacity style={{ flex: 1 }} onPress={() => setStaffPicker(false)} activeOpacity={1} />
+          <View style={st.sheet}>
+            <View style={st.handle} />
+            <Text style={st.sheetTitle}>Assign to Sales Staff</Text>
+
+            <View style={st.sheetSearch}>
+              <Ionicons name="search" size={17} color={ERP.muted} style={{ marginLeft: 10 }} />
+              <TextInput
+                style={st.sheetSearchInput}
+                placeholder="Search name, mobile or designation…"
+                placeholderTextColor={ERP.faint}
+                value={staffSearch}
+                onChangeText={setStaffSearch}
+                autoFocus
+                autoCapitalize="none"
+              />
+            </View>
+
+            {staffLoading ? (
+              <ErpLoading label="Loading staff…" />
+            ) : (
+              <FlatList
+                data={filteredStaff}
+                keyExtractor={s => s._id}
+                style={{ maxHeight: 380 }}
+                keyboardShouldPersistTaps="handled"
+                ListEmptyComponent={
+                  <Text style={st.sheetEmpty}>
+                    No staff found. Add one from the Staff screen first.
+                  </Text>
+                }
+                renderItem={({ item: s }) => (
+                  <TouchableOpacity
+                    style={st.pickRow}
+                    onPress={() => {
+                      setAssignedStaff({ _id: s._id, name: s.name, designation: s.designation, mobile: s.mobile });
+                      setStaffPicker(false);
+                    }}
+                    activeOpacity={0.7}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={st.pickRowName}>{s.name}</Text>
+                      <Text style={st.pickRowMeta}>
+                        {[s.designation, s.mobile].filter(Boolean).join(' · ') || 'No designation set'}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={ERP.faint} />
+                  </TouchableOpacity>
+                )}
+              />
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -426,6 +549,7 @@ const st = StyleSheet.create({
   },
   pickBtnEmpty: { borderColor: ERP.border },
   pickTxt: { flex: 1, fontSize: 14, fontWeight: '700', color: ERP.text, marginRight: 8 },
+  pickTxtEmpty: { color: ERP.muted, fontWeight: '500' },
   pickMeta: { fontSize: 11.5, color: ERP.muted, marginTop: 5 },
 
   removeBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-end', paddingVertical: 4 },
