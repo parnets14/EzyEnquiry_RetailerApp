@@ -67,6 +67,26 @@ const CARD_SHADOW = {
  * press-disabled with a "coming soon" notice, so the dashboard can present the
  * full wholesaler module map before every module screen exists.
  */
+
+// Group broadcast enquiries — N sibling rows (one per recipient) → one card
+const STATUS_RANK_H = { Cancelled: 0, New: 1, Viewed: 2, Replied: 3, Negotiation: 4, Confirmed: 5 };
+function groupBroadcastsHome(rows) {
+  const byCode = new Map();
+  for (const r of rows) {
+    const key = r.enq_code || r.enquiry_code || r.id || r._id;
+    if (!byCode.has(key)) byCode.set(key, []);
+    byCode.get(key).push(r);
+  }
+  return [...byCode.values()].map(members => {
+    if (members.length === 1) return members[0];
+    const status = members.map(m => m.status).sort((a, b) => (STATUS_RANK_H[b] ?? 1) - (STATUS_RANK_H[a] ?? 1))[0];
+    const replied = members.filter(m =>
+      ['Replied','Negotiation','Confirmed'].includes(m.status) || m.offered_price != null
+    ).length;
+    return { ...members[0], __group: true, __count: members.length, __replied: replied, status };
+  });
+}
+
 const READY_ROUTES = new Set([
   SCREENS.SEARCH, SCREENS.ADD_PRODUCT, SCREENS.CATEGORIES_BRANDS,
   SCREENS.MY_PRODUCTS, SCREENS.PRODUCT_DETAILS,
@@ -86,6 +106,10 @@ const READY_ROUTES = new Set([
   SCREENS.CUSTOMER_LIST, SCREENS.LEAD_LIST, SCREENS.REPORT_CENTER, SCREENS.ANALYTICS,
   SCREENS.DISPATCH_TRACKING, SCREENS.DISPATCH_ENTRY,
   SCREENS.DOCUMENT_REPOSITORY,
+  // Retailer-only screens re-homed onto the "More" group after the Profile
+  // screen was rebuilt to the wholesaler's exact section list (2026-09-30).
+  SCREENS.SUPPLIER_LIST, SCREENS.DOCUMENTS, SCREENS.COMPANY_DETAILS,
+  SCREENS.NOTIFICATION_SETTINGS, SCREENS.HELP_SUPPORT,
   SCREENS.STONE_CALC,
 ]);
 
@@ -203,17 +227,24 @@ function AlertRow({ icon, iconColor, bg, accent, title, sub, onPress }) {
 
 function EnqCard({ item, onPress, isLast }) {
   const meta = ENQ_STATUS[item.status] || ENQ_STATUS.New;
-  // The dashboard payload may carry a wholesaler-shaped (flat) enquiry OR the
-  // retailer's own nested DTO — accept both. `enq_code`/`retailer_name`/…
-  // exist only on the flat shape; the retailer's `enquiryResponse` sends
-  // `enquiry_code`, `product{}`, `customer{}`, `seller{}` and `id`.
   const id      = item.id || item._id;
   const code    = item.enq_code || item.enquiry_code || `#${String(id || '').slice(-6)}`;
-  const party   = item.retailer_name || item.customer_name
-                || item.customer?.name || item.seller?.name || 'Customer';
   const product = item.product_name || item.product_code
                 || item.product?.name || item.product?.code || 'Product';
   const qty     = item.qty ?? item.quantity ?? 0;
+
+  // For a SENT broadcast the retailer is the sender — showing retailer_name
+  // prints the retailer's own company name back at them. Show product instead.
+  const isSent  = item.is_recipient !== true;
+  const party   = isSent
+    ? product   // sent by us → product is the meaningful label
+    : (item.retailer_name || item.customer_name
+       || item.customer?.name || item.seller?.name || 'Customer');
+
+  // For sent broadcasts, show how many replied (if any)
+  const repliedNote = isSent && item.__replied > 0
+    ? `${item.__replied} ${item.__replied === 1 ? 'reply' : 'replies'} received`
+    : null;
 
   return (
     <TouchableOpacity
@@ -234,12 +265,21 @@ function EnqCard({ item, onPress, isLast }) {
         </View>
         <View style={st.enquiryMeta}>
           <Text style={st.enquiryCode}>{code}</Text>
-          <View style={st.metaDot} />
-          <Ionicons name="cube-outline" size={11} color={TEXT_3} />
-          <Text style={st.metaText} numberOfLines={1}>{product}</Text>
+          {!isSent && (
+            <>
+              <View style={st.metaDot} />
+              <Ionicons name="cube-outline" size={11} color={TEXT_3} />
+              <Text style={st.metaText} numberOfLines={1}>{product}</Text>
+            </>
+          )}
           <View style={st.metaDot} />
           <Text style={st.metaText}>Qty {qty}</Text>
         </View>
+        {repliedNote ? (
+          <Text style={{ fontSize: 10, color: '#10b981', fontWeight: '700', marginTop: 2 }}>
+            {repliedNote}
+          </Text>
+        ) : null}
       </View>
       <Ionicons name="chevron-forward" size={18} color="#C7CCD6" />
     </TouchableOpacity>
@@ -316,11 +356,20 @@ export default function HomeScreen({ navigation }) {
   const monthExpense  = d.monthExpense  ?? 0;
   const monthProfit   = d.monthProfit   ?? (monthSales - monthPurchase - monthExpense);
 
-  const totalEnquiries = d.totalEnquiries ?? counts.enquiries ?? 0;
-  const newEnquiries   = d.newEnquiries   ?? 0;
-  const unread         = counts.unread_notifications || 0;
+  const rawTotalEnquiries = d.totalEnquiries ?? counts.enquiries ?? 0;
+  const newEnquiries      = d.newEnquiries   ?? 0;
+  const unread            = counts.unread_notifications || 0;
 
-  const recentEnquiries = d.recentEnquiries || [];
+  // Group broadcast enquiries so 1 broadcast = 1 card (not N sibling rows)
+  const rawRecentEnquiries = d.recentEnquiries || [];
+  const sentGrouped  = groupBroadcastsHome(rawRecentEnquiries.filter(e => e.is_recipient !== true));
+  const recvRecent   = rawRecentEnquiries.filter(e => e.is_recipient === true);
+  const recentEnquiries = [...sentGrouped, ...recvRecent]
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+  // Use grouped count for display; fall back to backend total if no recent data
+  const totalEnquiries = rawRecentEnquiries.length > 0
+    ? sentGrouped.length + recvRecent.length
+    : rawTotalEnquiries;
 
   const initialsText = initials(ownerName);
 
@@ -424,6 +473,25 @@ export default function HomeScreen({ navigation }) {
       ],
     },
     {
+      // The wholesaler's "More" group is exactly these 4 tiles
+      // (`dashboard/DashboardScreen.jsx` lines 363-371). Everything below them is
+      // RETAILER-ONLY and exists here because the Profile screen was rebuilt to
+      // the wholesaler's exact section list on 2026-09-30, which dropped these
+      // rows. Re-homed rather than deleted so no screen is orphaned — see
+      // SKILL.md → "a tile missing from the wholesaler is not automatically a
+      // tile to delete" (orphan → re-home, duplicate → delete).
+      //
+      //   Suppliers          was Profile → Billing & Finance → Suppliers
+      //   Payment Payable    was Profile → Billing & Finance → Payment Payable
+      //   KYC Verification   was Profile → Settings → KYC Verification
+      //   Edit Company       was Profile → Settings → Edit Company
+      //   Notification Prefs was Profile → Settings → Notifications
+      //   Help & Support     was Profile → Settings → Help & Support
+      //
+      // `module` keys are set only where the backend route is module-gated
+      // (`requireRetailerModule`), so a staff member without that module never
+      // sees a tile that would 403: suppliers → 'purchases', payables →
+      // 'payments'. The rest are ungated routes, exactly as the Profile rows were.
       title: 'More',
       items: [
         { icon: 'bar-chart-outline',   iconColor: '#2563EB', bg: '#EFF6FF', label: 'Reports',   module: 'reports',     screen: SCREENS.REPORT_CENTER },
@@ -431,8 +499,11 @@ export default function HomeScreen({ navigation }) {
         { icon: 'person-outline',      iconColor: '#6D28D9', bg: '#F5F3FF', label: 'Staff',     module: 'staff',       screen: SCREENS.STAFF_LIST },
         // Documents = the free-form repository (typed uploads, tabs, list),
         // matching the wholesaler's Documents tile. The retailer-only KYC
-        // verification screen lives under Profile → KYC Verification.
+        // verification screen is the separate tile below.
         { icon: 'folder-outline',      iconColor: '#0891B2', bg: '#ECFEFF', label: 'Documents', module: 'documents',   screen: SCREENS.DOCUMENT_REPOSITORY },
+
+        
+        
       ],
     },
   ];

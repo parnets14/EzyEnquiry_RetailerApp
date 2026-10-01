@@ -71,10 +71,51 @@ const STATUS_META = {
   Cancelled:   { bg: '#FEF2F2', text: '#DC2626', dot: '#F87171' },
 };
 
+// One broadcast = ONE card.
+// A retailer's broadcast is N sibling enquiries — one per wholesaler plus the
+// Admin — all sharing an `enq_code`. Without grouping the Sent tab shows N
+// near-identical cards for a single action, which reads as "it created it many
+// times". Group by code and summarise: how many sellers, how many replied, and
+// the best quote so far.
+const STATUS_RANK = { Cancelled: 0, New: 1, Viewed: 2, Replied: 3, Negotiation: 4, Confirmed: 5 };
+
+const rowHasReplied = (r) =>
+  ['Replied', 'Negotiation', 'Confirmed'].includes(r.status)
+  || !!(r.distributor_reply || '').trim()
+  || r.accepted_offer_price != null
+  || r.available_quantity != null;
+
+function groupBroadcasts(rows) {
+  const byCode = new Map();
+  for (const r of rows) {
+    const key = r.enquiry_code || String(r.id);
+    if (!byCode.has(key)) byCode.set(key, []);
+    byCode.get(key).push(r);
+  }
+  return [...byCode.values()].map(members => {
+    if (members.length === 1) return members[0];
+    const status = members
+      .map(m => m.status)
+      .sort((a, b) => (STATUS_RANK[b] ?? 1) - (STATUS_RANK[a] ?? 1))[0];
+    const prices = members.map(m => +(m.accepted_offer_price || 0)).filter(Boolean);
+    return {
+      ...members[0],
+      __group: true,
+      __count: members.length,
+      __replied: members.filter(rowHasReplied).length,
+      status,
+      accepted_offer_price: prices.length ? Math.min(...prices) : null,
+    };
+  });
+}
+
 export default function EnquiriesScreen({ navigation }) {
   const [tabIdx, setTabIdx]         = useState(0);
   const [search, setSearch]         = useState('');
   const [showSearch, setShowSearch] = useState(false);
+  // 'received' = sent TO this retailer (we owe a reply)
+  // 'sent'     = raised BY this retailer (we are waiting on answers)
+  const [dirTab,     setDirTab]     = useState('received');
   const [refreshing, setRefreshing] = useState(false);
 
   // Same hook the wholesaler uses. It loads ALL enquiries once (limit 100) and
@@ -91,12 +132,28 @@ export default function EnquiriesScreen({ navigation }) {
     setRefreshing(false);
   }, [refetch]);
 
+  // The create screen is a stack screen, so returning here re-fires the
+  // focus-effect refetch above and the brand-new enquiry appears immediately.
+  const goToCreate = useCallback(
+    () => navigation.navigate(SCREENS.CREATE_ENQUIRY),
+    [navigation],
+  );
+
   const list         = Array.isArray(enquiries) ? enquiries : [];
   const activeStatus = STATUS_TABS[tabIdx];
   const newCount     = unreadCount;
 
+  // `is_recipient` comes from the backend: a broadcast row carries the RECIPIENT
+  // as `company_id`, so the same document is "received" in one app and "sent" in
+  // another. Splitting here keeps the status pills scoped to the visible tab.
+  const isSentOf     = (e) => e.is_recipient !== true;
+  const byDirection  = list.filter(e => (dirTab === 'received' ? !isSentOf(e) : isSentOf(e)));
+  // Received stays one card per enquiry (each is addressed to us and needs its
+  // own reply); Sent collapses each broadcast into a single card.
+  const dirRows      = dirTab === 'sent' ? groupBroadcasts(byDirection) : byDirection;
+
   const q = search.trim().toLowerCase();
-  const filtered = list.filter(e => {
+  const filtered = dirRows.filter(e => {
     const matchTab = activeStatus === 'All' || e.status === activeStatus;
     const matchSearch = !q
       || (e.enquiry_code || '').toLowerCase().includes(q)
@@ -119,7 +176,12 @@ export default function EnquiriesScreen({ navigation }) {
           <View style={styles.navTitleWrap}>
             <Text style={styles.navTitle}>Enquiries</Text>
             <Text style={styles.navSub}>
-              {list.length} total{newCount > 0 ? `  ·  ${newCount} new` : ''}
+              {(() => {
+                const sentGrouped = groupBroadcasts(list.filter(e => isSentOf(e))).length;
+                const received = list.filter(e => !isSentOf(e)).length;
+                const total = sentGrouped + received;
+                return `${total} total${newCount > 0 ? `  ·  ${newCount} new` : ''}`;
+              })()}
             </Text>
           </View>
 
@@ -165,6 +227,33 @@ export default function EnquiriesScreen({ navigation }) {
         )}
       </View>
 
+      {/* ══ Received / Sent ══ */}
+      {/* Two lists, not one: what was ASKED of us (and needs a reply) versus
+          what we ASKED (and are waiting on answers for). */}
+      <View style={styles.dirBar}>
+        {[
+          { key: 'received', label: 'Received' },
+          { key: 'sent',     label: 'Sent' },
+        ].map(t => {
+          const active = dirTab === t.key;
+          // For 'sent', count grouped broadcasts (1 per broadcast, not 1 per recipient row)
+          const rawRows = list.filter(e => (t.key === 'received' ? !isSentOf(e) : isSentOf(e)));
+          const n = t.key === 'sent' ? groupBroadcasts(rawRows).length : rawRows.length;
+          return (
+            <TouchableOpacity
+              key={t.key}
+              style={[styles.dirBtn, active && styles.dirBtnActive]}
+              onPress={() => { setDirTab(t.key); setTabIdx(0); }}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.dirBtnText, active && styles.dirBtnTextActive]}>
+                {t.label} ({n})
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
       {/* ══ Status tabs ══ */}
       <View style={styles.tabBarWrap}>
         <FlatList
@@ -176,8 +265,8 @@ export default function EnquiriesScreen({ navigation }) {
           renderItem={({ item: tab, index }) => {
             const active = index === tabIdx;
             const count = tab === 'All'
-              ? list.length
-              : list.filter(e => e.status === tab).length;
+              ? dirRows.length
+              : dirRows.filter(e => e.status === tab).length;
             return (
               <TouchableOpacity
                 style={[styles.tab, active && styles.tabActive]}
@@ -219,10 +308,26 @@ export default function EnquiriesScreen({ navigation }) {
             <EmptyState
               iconName="mail-open-outline"
               title={`No ${activeStatus === 'All' ? '' : activeStatus + ' '}enquiries`}
-              message={q ? 'Try a different search term.' : 'Pull down to refresh.'}
+              message={q ? 'Try a different search term.' : 'Raise one to get a price from the seller.'}
+              buttonTitle={q ? undefined : 'New Enquiry'}
+              onButtonPress={q ? undefined : goToCreate}
             />
           }
         />
+      )}
+
+      {/* ══ New enquiry FAB ══ */}
+      {/* The navbar is already carrying a title, a "new" pill and two icon
+          buttons, so the create action lives here instead of crowding it. */}
+      {!showSearch && (
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={goToCreate}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="add" size={26} color="#FFF" />
+          <Text style={styles.fabLabel}>Enquiry</Text>
+        </TouchableOpacity>
       )}
     </SafeAreaView>
   );
@@ -231,9 +336,20 @@ export default function EnquiriesScreen({ navigation }) {
 const EnquiryCardRow = ({ item, navigation }) => {
   const meta  = STATUS_META[item.status] || STATUS_META.New;
   const isNew = item.status === 'New';
+  const isReceived = item.is_recipient === true;
 
-  // See the header note on the party line.
-  const partyName = item.customer?.name || item.seller?.name || '—';
+  // For received: show who sent it (the wholesaler/admin company name)
+  // For sent grouped: product name is the primary label (handled in sent tab)
+  const senderName = isReceived
+    ? (item.sender?.name || item.retailer_name || '—')
+    : (item.customer?.name || item.seller?.name || null);
+  const senderMobile = isReceived
+    ? (item.sender?.mobile || item.retailer_mobile || '')
+    : '';
+
+  const productName = item.product?.name || item.product?.code || item.product_name || '—';
+  const offeredPrice = item.accepted_offer_price || item.offered_price || null;
+  const availQty = item.available_quantity ?? null;
 
   return (
     <TouchableOpacity
@@ -244,12 +360,13 @@ const EnquiryCardRow = ({ item, navigation }) => {
       {isNew && <View style={styles.newStrip} />}
 
       <View style={styles.cardInner}>
-        {/* Code + status */}
+
+        {/* ── Row 1: Code + Status chip ── */}
         <View style={styles.cardRow}>
           <View style={styles.codeWrap}>
             <Ionicons name="pricetag-outline" size={12} color={Colors.textTertiary} />
             <Text style={styles.enqCode}>
-              {item.enquiry_code || `#${String(item.id || '').slice(-6)}`}
+              {item.enquiry_code || item.enq_code || `#${String(item.id || '').slice(-6)}`}
             </Text>
           </View>
           <View style={[styles.chip, { backgroundColor: meta.bg }]}>
@@ -258,29 +375,40 @@ const EnquiryCardRow = ({ item, navigation }) => {
           </View>
         </View>
 
-        {/* Party */}
-        <Text style={styles.partyName} numberOfLines={1}>{partyName}</Text>
+        {/* ── Row 2: From (received) or product (sent grouped) ── */}
+        {isReceived ? (
+          <View style={{ marginTop: 6, marginBottom: 2 }}>
+            <Text style={styles.partyName} numberOfLines={1}>{senderName}</Text>
+            {senderMobile ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                <Ionicons name="call-outline" size={11} color={Colors.textTertiary} />
+                <Text style={styles.metaText}>{senderMobile}</Text>
+              </View>
+            ) : null}
+          </View>
+        ) : (
+          <>
+            {senderName ? <Text style={styles.partyName} numberOfLines={1}>{senderName}</Text> : null}
+            {item.__group && item.__replied > 0 ? (
+              <Text style={[styles.groupSub, { color: '#10b981' }]}>
+                {item.__replied} {item.__replied === 1 ? 'reply' : 'replies'} received
+              </Text>
+            ) : null}
+          </>
+        )}
 
-        {/* Product */}
-        <View style={styles.productRow}>
+        {/* ── Row 3: Product ── */}
+        <View style={[styles.productRow, { marginTop: 6 }]}>
           <Ionicons name="cube-outline" size={13} color={Colors.textSecondary} />
-          <Text style={styles.productText} numberOfLines={1}>
-            {item.product?.name || item.product?.code || '—'}
-          </Text>
+          <Text style={styles.productText} numberOfLines={1}>{productName}</Text>
         </View>
 
-        {/* Qty · price · location */}
-        <View style={styles.metaRow}>
+        {/* ── Row 4: Qty · Location ── */}
+        <View style={[styles.metaRow, { marginTop: 4 }]}>
           <View style={styles.metaItem}>
-            <Ionicons name="calculator-outline" size={12} color={Colors.textTertiary} />
-            <Text style={styles.metaText}>Qty: {item.qty || 0} {item.unit || ''}</Text>
+            <Ionicons name="layers-outline" size={12} color={Colors.textTertiary} />
+            <Text style={styles.metaText}>{item.qty || 0} {item.unit || ''}</Text>
           </View>
-          {item.accepted_offer_price ? (
-            <View style={styles.metaItem}>
-              <Ionicons name="pricetag-outline" size={12} color={Colors.textTertiary} />
-              <Text style={styles.metaText}>{formatCurrency(item.accepted_offer_price)}</Text>
-            </View>
-          ) : null}
           {item.location ? (
             <View style={styles.metaItem}>
               <Ionicons name="location-outline" size={12} color={Colors.textTertiary} />
@@ -289,8 +417,30 @@ const EnquiryCardRow = ({ item, navigation }) => {
           ) : null}
         </View>
 
-        {/* Date + chevron */}
-        <View style={[styles.cardRow, styles.cardRowLast]}>
+        {/* ── Row 5: Offered ₹ + Availability (mirrors CRM "Offered ₹" column) ── */}
+        {(offeredPrice || availQty != null) ? (
+          <View style={[styles.metaRow, { marginTop: 4 }]}>
+            {offeredPrice ? (
+              <View style={styles.metaItem}>
+                <Ionicons name="cash-outline" size={12} color="#10b981" />
+                <Text style={[styles.metaText, { color: '#10b981', fontWeight: '700' }]}>
+                  ₹{Number(offeredPrice).toLocaleString('en-IN')}
+                </Text>
+              </View>
+            ) : null}
+            {availQty != null ? (
+              <View style={styles.metaItem}>
+                <Ionicons name="archive-outline" size={12} color="#10b981" />
+                <Text style={[styles.metaText, { color: '#10b981', fontWeight: '600' }]}>
+                  Avail: {availQty} {item.unit || ''}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
+        {/* ── Row 6: Date + chevron ── */}
+        <View style={[styles.cardRow, styles.cardRowLast, { marginTop: 6 }]}>
           <View style={styles.metaItem}>
             <Ionicons name="time-outline" size={11} color={Colors.textTertiary} />
             <Text style={styles.dateText}>{formatDate(item.created_at)}</Text>
@@ -299,6 +449,7 @@ const EnquiryCardRow = ({ item, navigation }) => {
             <Ionicons name="chevron-forward" size={16} color={Colors.primary} />
           </View>
         </View>
+
       </View>
     </TouchableOpacity>
   );
@@ -343,6 +494,22 @@ const styles = StyleSheet.create({
   },
   searchInput: { flex: 1, ...Typography.body2, color: Colors.textPrimary, paddingVertical: 0 },
 
+  /* ── Received / Sent ── */
+  dirBar: {
+    flexDirection: 'row', gap: 8,
+    paddingHorizontal: 12, paddingTop: 10, paddingBottom: 4,
+    backgroundColor: Colors.white,
+  },
+  dirBtn: {
+    flex: 1, alignItems: 'center', paddingVertical: 9,
+    borderRadius: BorderRadius.button,
+    backgroundColor: Colors.background,
+    borderWidth: 1.5, borderColor: 'transparent',
+  },
+  dirBtnActive: { backgroundColor: Colors.primaryBg, borderColor: Colors.primary },
+  dirBtnText: { fontSize: 12.5, fontWeight: '700', color: Colors.textSecondary },
+  dirBtnTextActive: { color: Colors.primary, fontWeight: '800' },
+
   /* ── Tabs ── */
   tabBarWrap: {
     backgroundColor: Colors.white,
@@ -365,7 +532,8 @@ const styles = StyleSheet.create({
   tabBadgeTextActive: { color: '#FFF' },
 
   /* ── Cards ── */
-  list: { padding: 12, paddingBottom: 32 },
+  // Extra bottom padding keeps the last card clear of the floating button.
+  list: { padding: 12, paddingBottom: 96 },
 
   card: {
     backgroundColor: Colors.white,
@@ -394,6 +562,7 @@ const styles = StyleSheet.create({
   chipText: { fontSize: 11, fontWeight: '700' },
 
   partyName: { fontSize: 15, fontWeight: '700', color: Colors.textPrimary, marginBottom: 5 },
+  groupSub: { fontSize: 11.5, color: Colors.primary, fontWeight: '700', marginBottom: 5 },
 
   productRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 6 },
   productText: { ...Typography.caption, fontSize: 13, color: Colors.textSecondary, flex: 1 },
@@ -412,4 +581,21 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24 },
   errorText: { ...Typography.body2, color: Colors.textSecondary, textAlign: 'center' },
   retryText: { ...Typography.body2, color: Colors.primary, fontWeight: '700' },
+
+  /* ── Floating "New Enquiry" button ── */
+  fab: {
+    position: 'absolute',
+    right: 16,
+    bottom: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: Colors.primary,
+    paddingLeft: 14,
+    paddingRight: 18,
+    paddingVertical: 13,
+    borderRadius: 28,
+    ...Shadows.lg,
+  },
+  fabLabel: { fontSize: 13.5, fontWeight: '800', color: '#FFF', letterSpacing: 0.2 },
 });

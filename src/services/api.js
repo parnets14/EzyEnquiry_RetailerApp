@@ -111,7 +111,11 @@ async function authHeader() {
 // ─── Low-level request ───────────────────────────────────────────────────────
 async function request(method, path, body, params, timeout = DEFAULT_TIMEOUT) {
   const url = buildUrl(path, params);
-  const headers = { 'Content-Type': 'application/json', ...(await authHeader()) };
+  const headers = {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-cache',    // prevent 304 stale responses
+    ...(await authHeader()),
+  };
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);

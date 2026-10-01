@@ -44,6 +44,16 @@ export const enquiryService = {
       client_message_id: clientMessageId,
     }),
 
+  // ── Replies to a broadcast we sent ──
+  // One call returns the whole roster: who answered (with their company details,
+  // price and availability) and who has not. A broadcast is N sibling enquiries
+  // sharing one enq_code, so listing them one by one is useless here.
+  listReplies: (enquiryId) => api.get(`/enquiries/${enquiryId}/replies`),
+
+  // ── Reply history — every reply ever sent, in order ──
+  listReplyHistory: (enquiryId) => api.get(`/enquiries/${enquiryId}/reply-history`),
+  createReplyHistory: (enquiryId, data) => api.post(`/enquiries/${enquiryId}/reply-history`, data),
+
   // ── Offers (the seller quotes, the retailer accepts/declines) ──
   listOffers: (enquiryId) =>
     api.get(`/enquiries/${enquiryId}/offers`),

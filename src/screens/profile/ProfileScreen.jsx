@@ -1,275 +1,535 @@
+/**
+ * src/screens/profile/ProfileScreen.jsx  (Retailer app)
+ *
+ * Rebuilt 2026-09-30 to mirror the wholesaler's `settings/ProfileScreen.jsx`
+ * section-for-section:
+ *
+ *   header (avatar ring · name · role badge · mobile/email · company · Edit Profile)
+ *     → inline edit form (Full Name / Mobile read-only / Email)
+ *     → Subscription badge ("Current Plan" + Upgrade)
+ *     → 4 grouped menu sections
+ *     → Logout button
+ *
+ * Two differences, both forced by the platform rather than chosen:
+ *
+ *  1. TITLE. The wholesaler's screen is a STACK screen pushed from its More menu,
+ *     so the navigator renders a native navy header ("My Profile") directly above
+ *     this screen's own navy header block. Here the screen is the `Profile` BOTTOM
+ *     TAB root (`AppNavigator.jsx` → `<Tab.Screen name={SCREENS.PROFILE}>`) with
+ *     `headerShown: false`, so the title is drawn inside the header block instead.
+ *     Same visual result; no back button, because a tab root has nowhere to go back to.
+ *
+ *  2. "FOLLOW-UPS" IS OMITTED. It is the only wholesaler row with no retailer
+ *     target: the wholesaler points it at `CustomerHistory`, a *per-customer*
+ *     screen that destructures `route.params.customerId` — and its own Profile row
+ *     passes no params, so that row throws in the wholesaler app too. The retailer
+ *     has no customer-history screen at all. Wiring it to nothing would just move
+ *     the crash here, so the row is dropped. (Reported, not fixed in the
+ *     wholesaler — that app is read-only.)
+ *
+ * Everything else is 1:1, with route names taken from this app's `SCREENS` and the
+ * styling expressed in this app's tokens (Colors / Shadows / Ionicons). The
+ * wholesaler's `theme.colors.*` and MaterialCommunityIcons are NOT copied — see
+ * SKILL.md → "Parity work: what 'make it exactly like the wholesaler' actually means".
+ */
 import React, { useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, StatusBar, Image,
+  Alert,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { Colors } from '../../theme/colors';
 import { Shadows } from '../../theme/spacing';
+import TextInput from '../../components/common/TextInput';
+import PrimaryButton from '../../components/common/PrimaryButton';
 import ConfirmationModal from '../../components/common/ConfirmationModal';
 import { useAuth } from '../../context/AuthContext';
+import { profileService } from '../../services/profileService';
 import { SCREENS } from '../../constants';
 
-const LOGO = require('../../assets/logo.jpeg');
+/* ── Menu sections ──
+ * Mirrors the wholesaler's MENU_SECTIONS (Reports & Alerts / Customers / Finance /
+ * Account) and its row order, mapped onto the retailer's own routes:
+ *
+ *   Reports       → ReportCenter          (same as wholesaler)
+ *   Analytics     → Analytics             (same)
+ *   Notifications → Notifications         (wholesaler: NotificationList)
+ *   Customers     → CustomerList          (same)
+ *   Expenses      → ExpenseList           (same)
+ *   Profit & Loss → ProfitLoss            (wholesaler: PLDashboard)
+ *   Payments      → PaymentReceivable     (same)
+ *   Accounts      → Accounts              (wholesaler: CustomerLedger — that screen
+ *                                          needs a partyId param this row can't
+ *                                          supply; the retailer's own Accounts
+ *                                          screen needs none)
+ *   Subscription  → Subscription          (wholesaler: SubscriptionPlan)
+ *
+ * Icons are the Ionicons equivalents of the wholesaler's MaterialCommunityIcons.
+ */
+const MENU_SECTIONS = [
+  {
+    key: 'business',
+    title: 'Reports & Alerts',
+    items: [
+      { label: 'Reports',       icon: 'bar-chart-outline',     color: '#2563EB', screen: SCREENS.REPORT_CENTER },
+      { label: 'Analytics',     icon: 'pie-chart-outline',     color: '#7C3AED', screen: SCREENS.ANALYTICS },
+      { label: 'Notifications', icon: 'notifications-outline', color: Colors.primary, screen: SCREENS.NOTIFICATIONS },
+    ],
+  },
+  {
+    key: 'team',
+    title: 'Customers',
+    items: [
+      { label: 'Customers', icon: 'people-outline', color: '#0891B2', screen: SCREENS.CUSTOMER_LIST },
+      // "Follow-ups" deliberately absent — see the file header.
+    ],
+  },
+  {
+    key: 'finance',
+    title: 'Finance',
+    items: [
+      { label: 'Expenses',      icon: 'receipt-outline',     color: '#DC2626', screen: SCREENS.EXPENSE_LIST },
+      { label: 'Profit & Loss', icon: 'stats-chart-outline', color: '#059669', screen: SCREENS.PROFIT_LOSS },
+      { label: 'Payments',      icon: 'cash-outline',        color: '#7C3AED', screen: SCREENS.PAYMENT_RECEIVABLE },
+      { label: 'Accounts',      icon: 'book-outline',        color: '#0891B2', screen: SCREENS.ACCOUNTS },
+    ],
+  },
+  {
+    key: 'account',
+    title: 'Account',
+    items: [
+      { label: 'Subscription', icon: 'star-outline', color: '#D97706', screen: SCREENS.SUBSCRIPTION },
+    ],
+  },
+];
+
+/* ── Small menu row ── */
+function MenuRow({ icon, label, color, onPress, isLast }) {
+  return (
+    <TouchableOpacity
+      style={[st.menuRow, !isLast && st.menuRowBorder]}
+      onPress={onPress}
+      activeOpacity={0.75}
+    >
+      <View style={[st.menuIconBox, { backgroundColor: color + '18' }]}>
+        <Ionicons name={icon} size={18} color={color} />
+      </View>
+      <Text style={st.menuLabel}>{label}</Text>
+      <Ionicons name="chevron-forward" size={16} color={Colors.textDisabled} />
+    </TouchableOpacity>
+  );
+}
+
+/** "Rajesh Kumar" → "RK" (first letter of the first two words). */
+function initialsOf(value) {
+  const parts = String(value || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return 'U';
+  return ((parts[0][0] || '') + (parts[1]?.[0] || '')).toUpperCase();
+}
 
 export default function ProfileScreen({ navigation }) {
-  const { user, logout } = useAuth();
-  const [showLogout, setShowLogout] = useState(false);
+  const { user, logout, refresh } = useAuth();
 
-  const ownerName = user?.name || user?.company?.owner_name || '—';
-  const email     = user?.email || '—';
-  const mobile    = user?.mobile || '—';
-  const company   = {
-    name:         user?.company?.name || user?.company_name || '—',
-    businessType: user?.company?.biz_type || '—',
-    gstNumber:    user?.company?.gst_number || '',
-    panNumber:    user?.company?.pan_number || '',
-    city:         user?.company?.city || '—',
-    state:        user?.company?.state || '—',
-    pincode:      user?.company?.pin_code || '—',
-  };
-  const subscription = {
-    plan:      user?.subscription_plan || user?.company?.subscription_plan || 'Free',
-    status:    user?.company_status || '—',
-    startDate: '',
-    expiryDate: '',
-    price:     0,
+  /**
+   * Draft-based editing: `null` = read-only.
+   *
+   * The wholesaler seeds two `useState`s from `user` once, which is fine there
+   * because its user is already resolved when the screen mounts. Here
+   * AuthContext hydrates the cached user and *then* refreshes from `/auth/me`,
+   * so a one-shot initial value can capture the empty pre-hydration state and
+   * the form would silently offer blank fields. Holding the draft instead means
+   * the read-only view always reads live from `user` and only the edit session
+   * is snapshotted.
+   */
+  const [draft, setDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [logoutDialog, setLogoutDialog] = useState(false);
+
+  const editMode = draft !== null;
+  const name     = editMode ? draft.name  : (user?.name  || '');
+  const email    = editMode ? draft.email : (user?.email || '');
+  const mobile   = user?.mobile || '';
+
+  const companyName = user?.company?.name || user?.company_name || '';
+  const displayName = user?.name || companyName || 'My Account';
+  const planName    = user?.subscription_plan || user?.company?.subscription_plan || 'Free';
+
+  // 'Retailer' is the owner role; 'RetailerStaff' is a staff login. The
+  // wholesaler prints its raw role in this slot — only the staff case needs
+  // wording that reads as a role rather than a business type.
+  const roleLabel = user?.role === 'RetailerStaff' ? 'Staff' : 'Company Owner';
+
+  const startEdit  = () => setDraft({ name: user?.name || '', email: user?.email || '' });
+  const cancelEdit = () => setDraft(null);
+
+  const handleSave = async () => {
+    if (!draft) return;
+    setSaving(true);
+    try {
+      // PUT /api/retailer/profile — accepts name / mobile / email
+      // (retailerAccountController.updateProfile). Mobile is shown read-only:
+      // it is the login identifier, so changing it needs a re-verification flow
+      // the app does not have yet.
+      await profileService.updateProfile({
+        name:  draft.name.trim(),
+        email: draft.email.trim(),
+      });
+      await refresh();          // re-read /auth/me so the header updates immediately
+      setDraft(null);
+      Alert.alert('Success', 'Profile updated successfully');
+    } catch (e) {
+      Alert.alert('Error', e?.message || 'Update failed');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleLogout = async () => {
-    setShowLogout(false);
+    setLogoutDialog(false);
     await logout();
+    // `useSessionGate` in AppNavigator also resets the stack to Login when the
+    // user goes set → null, so this is belt-and-braces, not the only path out.
     navigation.replace(SCREENS.LOGIN);
   };
 
   return (
     <SafeAreaView style={st.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
+      <StatusBar barStyle="light-content" backgroundColor={Colors.secondary} />
 
-      {/* ═══ HEADER ═══ */}
-      <View style={st.header}>
-        <View style={st.headerTopRow}>
-          <TouchableOpacity
-            style={st.backBtn}
-            onPress={() => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate('HomeTab'))}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="arrow-back" size={22} color="#FFF" />
-          </TouchableOpacity>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={st.scrollContent}
+      >
+        {/* ══════════════════════════════════
+            HEADER — user card
+        ══════════════════════════════════ */}
+        <View style={st.header}>
+          <View style={st.hCircle1} />
+          <View style={st.hCircle2} />
+
+          {/* The wholesaler gets this title from the navigator's native header. */}
           <Text style={st.headerTitle}>My Profile</Text>
-          <View style={st.backBtn} />
-        </View>
 
-        {/* Profile card inside header — sticks out below */}
-        <View style={st.profileCard}>
-          <View style={st.avatar}>
-            <Text style={st.avatarTxt}>{ownerName?.charAt(0)}</Text>
-          </View>
-          <View style={st.profileInfo}>
-            <Text style={st.profileName}>{ownerName}</Text>
-            <Text style={st.profileCompany}>{company.name}</Text>
-            <View style={st.profileMeta}>
-              <View style={st.profileMetaRow}>
-                <Ionicons name="call-outline" size={14} color={Colors.primary} />
-                <Text style={st.profileMetaText}>{mobile}</Text>
-              </View>
-              <View style={st.profileMetaRow}>
-                <Ionicons name="mail-outline" size={14} color={Colors.primary} />
-                <Text style={st.profileMetaText}>{email}</Text>
-              </View>
+          {/* Avatar */}
+          <View style={st.avatarRing}>
+            <View style={st.avatar}>
+              <Text style={st.avatarText}>{initialsOf(displayName)}</Text>
             </View>
           </View>
-          <View style={st.planBadge}>
-            <Ionicons name="star" size={10} color="#F59E0B" />
-            <Text style={st.planBadgeText}>{subscription.plan}</Text>
+
+          <Text style={st.displayName}>{displayName}</Text>
+
+          <View style={st.roleBadge}>
+            <Ionicons name="shield-checkmark-outline" size={13} color={Colors.primaryLight} />
+            <Text style={st.roleText}>{roleLabel}</Text>
           </View>
+
+          {/* Quick info row */}
+          <View style={st.infoRow}>
+            {mobile ? (
+              <View style={st.infoItem}>
+                <Ionicons name="call-outline" size={13} color="rgba(255,255,255,0.7)" />
+                <Text style={st.infoText}>{mobile}</Text>
+              </View>
+            ) : null}
+            {email ? (
+              <View style={st.infoItem}>
+                <Ionicons name="mail-outline" size={13} color="rgba(255,255,255,0.7)" />
+                <Text style={st.infoText} numberOfLines={1}>{email}</Text>
+              </View>
+            ) : null}
+          </View>
+
+          {/* Company, when it differs from the display name */}
+          {companyName && companyName !== displayName ? (
+            <View style={st.companyRow}>
+              <Ionicons name="business-outline" size={13} color="rgba(255,255,255,0.65)" />
+              <Text style={st.companyText}>{companyName}</Text>
+            </View>
+          ) : null}
+
+          {/* Edit / Save toggle */}
+          <TouchableOpacity
+            style={st.editBtn}
+            onPress={() => (editMode ? handleSave() : startEdit())}
+            activeOpacity={0.85}
+          >
+            <Ionicons
+              name={editMode ? 'save-outline' : 'pencil-outline'}
+              size={15}
+              color="#FFF"
+            />
+            <Text style={st.editBtnText}>{editMode ? 'Save Changes' : 'Edit Profile'}</Text>
+          </TouchableOpacity>
         </View>
-      </View>
 
-      <ScrollView showsVerticalScrollIndicator={false}>
+        {/* ══════════════════════════════════
+            EDIT FORM (shown only in edit mode)
+        ══════════════════════════════════ */}
+        {editMode ? (
+          <View style={st.formCard}>
+            <Text style={st.formTitle}>Edit Profile</Text>
 
-        {/* Spacer for card overlap */}
-        <View style={{ height: 50 }} />
+            <TextInput
+              label="Full Name"
+              value={name}
+              onChangeText={(v) => setDraft(d => ({ ...d, name: v }))}
+              placeholder="Your full name"
+              autoCapitalize="words"
+              maxLength={150}
+            />
+            <TextInput
+              label="Mobile"
+              value={mobile}
+              editable={false}
+              placeholder="Mobile number"
+              helperText="Mobile is your login ID and cannot be changed here."
+            />
+            <TextInput
+              label="Email"
+              value={email}
+              onChangeText={(v) => setDraft(d => ({ ...d, email: v }))}
+              placeholder="Email address"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              maxLength={254}
+            />
 
-        {/* ═══ COMPANY DETAILS ═══ */}
-        <Text style={st.secTitle}>Company Details</Text>
-        <View style={st.detailsCard}>
-          <DetailItem icon="business" color="#2980B9" bg="#EBF5FB" label="Company Name" value={company.name} />
-          <DetailItem icon="briefcase" color="#27AE60" bg="#E8F8EF" label="Business Type" value={company.businessType} />
-          <DetailItem icon="location" color="#E74C3C" bg="#FDEDEC" label="City" value={company.city} />
-          <DetailItem icon="map" color="#1A2340" bg="#EEF0F5" label="State" value={company.state} />
-          <DetailItem icon="keypad" color="#F39C12" bg="#FEF9E7" label="PIN Code" value={company.pincode} />
-          <DetailItem icon="document-text" color={Colors.primary} bg="#FFF3EE" label="GST Number" value={company.gstNumber || 'Not Registered'} />
-          <DetailItem icon="card" color="#8E44AD" bg="#F5EEF8" label="PAN Number" value={company.panNumber || 'Not Provided'} last />
-        </View>
+            <View style={st.formBtns}>
+              <PrimaryButton
+                title="Cancel"
+                variant="outline"
+                onPress={cancelEdit}
+                style={st.cancelBtn}
+              />
+              <PrimaryButton
+                title="Save"
+                onPress={handleSave}
+                loading={saving}
+                style={st.saveBtn}
+              />
+            </View>
+          </View>
+        ) : null}
 
-        {/* ═══ SUBSCRIPTION ═══ */}
-        <Text style={st.secTitle}>Subscription</Text>
-        <View style={st.subCard}>
-          <View style={st.subRow}>
+        {/* ══════════════════════════════════
+            SUBSCRIPTION BADGE
+        ══════════════════════════════════ */}
+        <TouchableOpacity
+          style={st.subBadge}
+          onPress={() => navigation.navigate(SCREENS.SUBSCRIPTION)}
+          activeOpacity={0.85}
+        >
+          <View style={st.subLeft}>
+            <Ionicons name="star" size={22} color="#D97706" />
             <View>
-              <Text style={st.subPlan}>{subscription.plan}</Text>
-              <Text style={st.subStatus}>Status: {subscription.status}</Text>
-            </View>
-            <View style={st.activeBadge}>
-              <Ionicons name="checkmark-circle" size={12} color="#27AE60" />
-              <Text style={st.activeText}>{subscription.status}</Text>
+              <Text style={st.subTitle}>Current Plan</Text>
+              <Text style={st.subPlan}>{planName}</Text>
             </View>
           </View>
-          <View style={st.subDates}>
-            <View style={st.subDateItem}>
-              <Text style={st.subDateLbl}>Start Date</Text>
-              <Text style={st.subDateVal}>{subscription.startDate || '—'}</Text>
-            </View>
-            <View style={st.subDateItem}>
-              <Text style={st.subDateLbl}>Validity</Text>
-              <Text style={st.subDateVal}>{subscription.expiryDate || 'Forever'}</Text>
-            </View>
-            <View style={st.subDateItem}>
-              <Text style={st.subDateLbl}>Price</Text>
-              <Text style={st.subDateVal}>{subscription.price === 0 ? 'Free' : `₹${subscription.price}/mo`}</Text>
+          <View style={st.subUpgrade}>
+            <Text style={st.subUpgradeText}>Upgrade</Text>
+            <Ionicons name="chevron-forward" size={15} color={Colors.primary} />
+          </View>
+        </TouchableOpacity>
+
+        {/* ══════════════════════════════════
+            MENU SECTIONS
+        ══════════════════════════════════ */}
+        {MENU_SECTIONS.map(section => (
+          <View key={section.key} style={st.section}>
+            <Text style={st.sectionTitle}>{section.title}</Text>
+            <View style={st.sectionCard}>
+              {section.items.map((item, idx) => (
+                <MenuRow
+                  key={item.label}
+                  icon={item.icon}
+                  label={item.label}
+                  color={item.color}
+                  isLast={idx === section.items.length - 1}
+                  onPress={() => navigation.navigate(item.screen)}
+                />
+              ))}
             </View>
           </View>
-        </View>
+        ))}
 
-        {/* ═══ BILLING / FINANCE ═══
-            Finance entry points that deliberately do NOT sit on the Home
-            dashboard's Finance tile group. The wholesaler keeps these in its
-            "Payments & Finance" section on the More screen
-            (`settings/MoreMenuScreen.jsx`) rather than the dashboard, so the two
-            dashboards stay identical — see HomeScreen `MODULE_GROUPS`. Without
-            these rows `Accounts` would have no entry point at all. */}
-        <Text style={st.secTitle}>Billing &amp; Finance</Text>
-        <View style={st.menuCard}>
-          <MenuItem icon="receipt-outline"   color={Colors.primary}   label="Invoices & Payments"   onPress={() => navigation.navigate(SCREENS.INVOICES)} />
-          <MenuItem icon="cash-outline"      color="#059669"          label="Payment Receivable"    onPress={() => navigation.navigate(SCREENS.PAYMENT_RECEIVABLE)} />
-          <MenuItem icon="wallet-outline"    color="#DC2626"          label="Payment Payable"       onPress={() => navigation.navigate(SCREENS.PAYMENT_PAYABLE)} />
-          <MenuItem icon="book-outline"      color="#2563EB"          label="Accounts"              onPress={() => navigation.navigate(SCREENS.ACCOUNTS)} />
-          {/* Retailer-only module — the wholesaler has no supplier screen. Kept
-              reachable here now that the Purchase list header matches the
-              wholesaler (back · title · + only). */}
-          <MenuItem icon="people-outline"    color="#7C3AED"          label="Suppliers"             onPress={() => navigation.navigate(SCREENS.SUPPLIER_LIST)} last />
+        {/* ══════════════════════════════════
+            LOGOUT BUTTON
+        ══════════════════════════════════ */}
+        <View style={st.logoutWrap}>
+          <TouchableOpacity
+            style={st.logoutBtn}
+            onPress={() => setLogoutDialog(true)}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="log-out-outline" size={18} color="#DC2626" />
+            <Text style={st.logoutText}>Logout</Text>
+          </TouchableOpacity>
         </View>
-
-        {/* ═══ MENU ═══ */}
-        <Text style={st.secTitle}>Settings</Text>
-        <View style={st.menuCard}>
-          <MenuItem icon="create-outline"          color="#2980B9"       label="Edit Company"      onPress={() => navigation.navigate(SCREENS.COMPANY_DETAILS)} />
-          <MenuItem icon="folder-outline"          color="#0891B2"       label="Documents"         onPress={() => navigation.navigate(SCREENS.DOCUMENT_REPOSITORY)} />
-          <MenuItem icon="shield-checkmark-outline" color="#27AE60"      label="KYC Verification"  onPress={() => navigation.navigate(SCREENS.DOCUMENTS)} />
-          <MenuItem icon="people-outline"          color={Colors.secondary} label="My Staff"       onPress={() => navigation.navigate(SCREENS.STAFF_LIST)} />
-          <MenuItem icon="star-outline"            color="#F59E0B"       label="Subscription"      onPress={() => navigation.navigate(SCREENS.SUBSCRIPTION)} />
-          <MenuItem icon="notifications-outline"   color="#8E44AD"       label="Notifications"     onPress={() => navigation.navigate(SCREENS.NOTIFICATION_SETTINGS)} />
-          <MenuItem icon="help-circle-outline"     color="#06B6D4"       label="Help & Support"    onPress={() => navigation.navigate(SCREENS.HELP_SUPPORT)} />
-          <MenuItem icon="log-out-outline"         color="#E74C3C"       label="Logout"            onPress={() => setShowLogout(true)} last />
-        </View>
-
-        {/* App info */}
-        <View style={st.appInfo}>
-          <Image source={LOGO} style={st.appLogo} resizeMode="cover" />
-          <Text style={st.appName}>EzyEnquiry · v1.0.0</Text>
-        </View>
-
-        <View style={{ height: 90 }} />
       </ScrollView>
 
       <ConfirmationModal
-        visible={showLogout}
+        visible={logoutDialog}
         title="Logout"
         message="Are you sure you want to logout?"
         confirmTitle="LOGOUT"
         cancelTitle="CANCEL"
         confirmVariant="danger"
-        onCancel={() => setShowLogout(false)}
+        onCancel={() => setLogoutDialog(false)}
         onConfirm={handleLogout}
       />
     </SafeAreaView>
   );
 }
 
-/* ── Sub-components ── */
-const DetailItem = ({ icon, color, bg, label, value, last }) => (
-  <View style={[st.detailItem, !last && st.detailBorder]}>
-    <View style={[st.detailIcon, { backgroundColor: bg }]}>
-      <Ionicons name={icon} size={16} color={color} />
-    </View>
-    <View style={st.detailText}>
-      <Text style={st.detailLabel}>{label}</Text>
-      <Text style={st.detailValue}>{value}</Text>
-    </View>
-  </View>
-);
-
-const MenuItem = ({ icon, color, label, onPress, last }) => (
-  <TouchableOpacity style={[st.menuItem, !last && st.detailBorder]} onPress={onPress} activeOpacity={0.8}>
-    <View style={[st.menuIcon, { backgroundColor: color + '15' }]}>
-      <Ionicons name={icon} size={16} color={color} />
-    </View>
-    <Text style={[st.menuLabel, color === '#E74C3C' && { color }]}>{label}</Text>
-    <Ionicons name="chevron-forward" size={16} color="#D1D5DB" />
-  </TouchableOpacity>
-);
-
 /* ── Styles ── */
 const st = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#F2F4F7' },
+  scrollContent: { paddingBottom: 40 },
 
-  /* Header */
-  header: { backgroundColor: Colors.secondary, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 24, alignItems: 'center', overflow: 'visible', zIndex: 10 },
-  headerTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', alignSelf: 'stretch', marginBottom: 18 },
-  backBtn: { width: 32, height: 32, alignItems: 'flex-start', justifyContent: 'center' },
-  headerTitle: { fontSize: 22, fontWeight: '800', color: '#FFF' },
-
-  /* Profile card — inside header, sticks out */
-  profileCard: {
-    flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF',
-    borderRadius: 16, padding: 18, gap: 14,
-    marginBottom: -44,
-    ...Shadows.md, elevation: 8,
+  /* ── Header ── */
+  header: {
+    backgroundColor: Colors.secondary,
+    paddingTop: 14,
+    paddingBottom: 28,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    overflow: 'hidden',
   },
-  avatar: { width: 54, height: 54, borderRadius: 27, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
-  avatarTxt: { fontSize: 22, fontWeight: '800', color: '#FFF' },
-  profileInfo: { flex: 1 },
-  profileName: { fontSize: 17, fontWeight: '700', color: Colors.textPrimary, marginBottom: 6 },
-  profileCompany: { fontSize: 12, color: Colors.textSecondary, marginBottom: 8 },
-  profileMeta: { gap: 5 },
-  profileMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  profileMetaText: { fontSize: 13, color: Colors.textSecondary },
-  planBadge: { position: 'absolute', top: 12, right: 14, flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: '#FFFBEB', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
-  planBadgeText: { fontSize: 9, fontWeight: '700', color: '#D97706' },
+  headerTitle: { fontSize: 20, fontWeight: '800', color: '#FFF', marginBottom: 20 },
+  hCircle1: {
+    position: 'absolute', top: -40, right: -40,
+    width: 160, height: 160, borderRadius: 80,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+  },
+  hCircle2: {
+    position: 'absolute', bottom: -20, left: -30,
+    width: 120, height: 120, borderRadius: 60,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  avatarRing: {
+    width: 90, height: 90, borderRadius: 45,
+    borderWidth: 3, borderColor: Colors.primary,
+    justifyContent: 'center', alignItems: 'center',
+    marginBottom: 12,
+  },
+  avatar: {
+    width: 80, height: 80, borderRadius: 40,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  avatarText: { fontSize: 32, fontWeight: '800', color: '#FFF' },
 
-  /* Section title */
-  secTitle: { fontSize: 14, fontWeight: '700', color: '#FFF', backgroundColor: Colors.secondary, paddingHorizontal: 16, paddingVertical: 10, marginTop: 16, marginHorizontal: 16, borderTopLeftRadius: 14, borderTopRightRadius: 14, overflow: 'hidden' },
+  displayName: {
+    fontSize: 20, fontWeight: '800', color: '#FFF',
+    marginBottom: 6, textAlign: 'center',
+  },
 
-  /* Details card */
-  detailsCard: { backgroundColor: '#FFF', borderBottomLeftRadius: 14, borderBottomRightRadius: 14, marginHorizontal: 16, ...Shadows.sm, overflow: 'hidden' },
-  detailItem: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 12 },
-  detailBorder: { borderBottomWidth: 1, borderBottomColor: '#F5F6F8' },
-  detailIcon: { width: 34, height: 34, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  detailText: { flex: 1 },
-  detailLabel: { fontSize: 10, color: Colors.textTertiary, fontWeight: '600', letterSpacing: 0.3 },
-  detailValue: { fontSize: 13, color: Colors.textPrimary, fontWeight: '600', marginTop: 2 },
+  roleBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12,
+    marginBottom: 12,
+  },
+  roleText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
 
-  /* Subscription */
-  subCard: { backgroundColor: '#FFF', borderRadius: 14, marginHorizontal: 16, ...Shadows.sm, overflow: 'hidden' },
-  subRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#F5F6F8' },
-  subPlan: { fontSize: 18, fontWeight: '800', color: Colors.secondary },
-  subStatus: { fontSize: 11, color: Colors.textSecondary, marginTop: 2 },
-  activeBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#E8F8EF', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 4 },
-  activeText: { fontSize: 10, fontWeight: '700', color: '#27AE60' },
-  subDates: { flexDirection: 'row', padding: 14 },
-  subDateItem: { flex: 1, alignItems: 'center' },
-  subDateLbl: { fontSize: 9, color: Colors.textTertiary, fontWeight: '600', marginBottom: 3 },
-  subDateVal: { fontSize: 12, color: Colors.textPrimary, fontWeight: '700' },
+  infoRow: {
+    flexDirection: 'row', gap: 18, marginBottom: 6,
+    flexWrap: 'wrap', justifyContent: 'center',
+  },
+  infoItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  infoText: { fontSize: 12, color: 'rgba(255,255,255,0.75)' },
 
-  /* Menu */
-  menuCard: { backgroundColor: '#FFF', borderRadius: 14, marginHorizontal: 16, ...Shadows.sm, overflow: 'hidden' },
-  menuItem: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 12 },
-  menuIcon: { width: 34, height: 34, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  menuLabel: { flex: 1, fontSize: 14, fontWeight: '500', color: Colors.textPrimary },
+  companyRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    marginTop: 2, marginBottom: 14,
+  },
+  companyText: { fontSize: 12, color: 'rgba(255,255,255,0.65)' },
 
-  /* App info */
-  appInfo: { alignItems: 'center', marginTop: 20, gap: 6 },
-  appLogo: { width: 32, height: 32, borderRadius: 8 },
-  appName: { fontSize: 11, color: Colors.textTertiary },
+  editBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    marginTop: 14,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    paddingHorizontal: 18, paddingVertical: 9,
+    borderRadius: 20,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)',
+  },
+  editBtnText: { fontSize: 13, fontWeight: '700', color: '#FFF' },
+
+  /* ── Edit form ── */
+  formCard: {
+    backgroundColor: '#FFF',
+    marginHorizontal: 14, marginTop: 14,
+    borderRadius: 16, padding: 16,
+    ...Shadows.md,
+  },
+  formTitle: {
+    fontSize: 14, fontWeight: '800',
+    color: Colors.textPrimary, marginBottom: 12,
+  },
+  formBtns: { flexDirection: 'row', gap: 10, marginTop: 6 },
+  cancelBtn: { flex: 1 },
+  saveBtn: { flex: 1 },
+
+  /* ── Subscription badge ── */
+  subBadge: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: '#FFF',
+    marginHorizontal: 14, marginTop: 14,
+    borderRadius: 14, padding: 14,
+    borderWidth: 1, borderColor: '#FBBF2430',
+    ...Shadows.sm,
+  },
+  subLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  subTitle: { fontSize: 11, color: Colors.textSecondary, fontWeight: '500' },
+  subPlan: { fontSize: 15, fontWeight: '800', color: Colors.textPrimary },
+  subUpgrade: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  subUpgradeText: { fontSize: 12, fontWeight: '700', color: Colors.primary },
+
+  /* ── Menu sections ── */
+  section: { marginHorizontal: 14, marginTop: 14 },
+  sectionTitle: {
+    fontSize: 11, fontWeight: '800',
+    color: Colors.textSecondary,
+    textTransform: 'uppercase', letterSpacing: 0.8,
+    marginBottom: 6, paddingLeft: 2,
+  },
+  sectionCard: {
+    backgroundColor: '#FFF',
+    borderRadius: 14,
+    overflow: 'hidden',
+    ...Shadows.sm,
+  },
+  menuRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 13, gap: 12,
+  },
+  menuRowBorder: {
+    borderBottomWidth: 1, borderBottomColor: Colors.border,
+  },
+  menuIconBox: {
+    width: 36, height: 36, borderRadius: 10,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  menuLabel: {
+    flex: 1, fontSize: 14, fontWeight: '500',
+    color: Colors.textPrimary,
+  },
+
+  /* ── Logout ── */
+  logoutWrap: { marginHorizontal: 14, marginTop: 14 },
+  logoutBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: '#FEF2F2',
+    borderRadius: 14, paddingVertical: 14,
+    borderWidth: 1, borderColor: '#FECACA',
+  },
+  logoutText: { fontSize: 15, fontWeight: '700', color: '#DC2626' },
 });

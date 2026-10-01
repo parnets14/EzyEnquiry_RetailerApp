@@ -40,6 +40,7 @@ import CategoriesBrandsScreen from '../screens/products/CategoriesBrandsScreen';
 
 // Enquiry Screens
 import EnquiryDetailsScreen from '../screens/enquiries/EnquiryDetailsScreen';
+import CreateEnquiryScreen  from '../screens/enquiries/CreateEnquiryScreen';
 
 // Quotation Screens
 import QuotationsScreen from '../screens/quotations/QuotationsScreen';
@@ -58,6 +59,10 @@ import NotificationsScreen from '../screens/notifications/NotificationsScreen';
 
 // Profile Screens
 import SubscriptionScreen from '../screens/profile/SubscriptionScreen';
+import CompanyDetailsScreen from '../screens/profile/CompanyDetailsScreen';
+import DocumentsScreen from '../screens/profile/DocumentsScreen';        // KYC verification
+import { NotificationSettingsScreen, HelpSupportScreen } from '../screens/profile/SettingsScreen';
+import SupplierListScreen from '../screens/erp/SupplierListScreen';
 
 // Staff Management Screens
 import StaffListScreen    from '../screens/staff/StaffListScreen';
@@ -255,6 +260,11 @@ const AppNavigator = React.forwardRef((props, ref) => {
 
       {/* Enquiries */}
       <Stack.Screen name={SCREENS.ENQUIRY_DETAILS}  component={EnquiryDetailsScreen} />
+      <Stack.Screen
+        name={SCREENS.CREATE_ENQUIRY}
+        component={CreateEnquiryScreen}
+        options={{ animation: 'slide_from_bottom' }}
+      />
 
       {/* Quotations */}
       <Stack.Screen name={SCREENS.QUOTATIONS}          component={QuotationsScreen} />
@@ -274,6 +284,13 @@ const AppNavigator = React.forwardRef((props, ref) => {
 
       {/* Profile */}
       <Stack.Screen name={SCREENS.SUBSCRIPTION}           component={SubscriptionScreen} />
+      <Stack.Screen name={SCREENS.COMPANY_DETAILS}        component={CompanyDetailsScreen} />
+      <Stack.Screen name={SCREENS.DOCUMENTS}              component={DocumentsScreen} />
+      <Stack.Screen name={SCREENS.NOTIFICATION_SETTINGS}  component={NotificationSettingsScreen} />
+      <Stack.Screen name={SCREENS.HELP_SUPPORT}           component={HelpSupportScreen} />
+      {/* ERP suppliers — reached from the Home dashboard's "More" group. Lives
+          here because its route constant sits in the Profile block. */}
+      <Stack.Screen name={SCREENS.SUPPLIER_LIST}          component={SupplierListScreen} />
 
       {/* Staff Management */}
       <Stack.Screen name={SCREENS.STAFF_LIST}     component={StaffListScreen} />

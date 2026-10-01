@@ -93,6 +93,9 @@ export const SCREENS = {
 
   // Enquiry
   ENQUIRY_DETAILS: 'EnquiryDetails',
+  // Raise a new enquiry from the retailer app (product-backed form, POST
+  // /retailer/enquiries). Reached from the Enquiries tab's FAB.
+  CREATE_ENQUIRY:  'CreateEnquiry',
 
   // Quotations
   QUOTATIONS: 'Quotations',
@@ -119,6 +122,18 @@ export const SCREENS = {
 
   // Profile
   SUBSCRIPTION: 'Subscription',
+  // Profile-adjacent screens. All five were navigated to by
+  // `screens/profile/ProfileScreen.jsx` while the constant itself was MISSING, so
+  // `SCREENS.X` evaluated to `undefined` and the navigation threw at runtime
+  // ("The action 'NAVIGATE' with payload {"name":undefined} was not handled").
+  // ESLint cannot catch this — `SCREENS` is defined, so `no-undef` never fires.
+  // The screen files all existed; they were simply registered nowhere.
+  // Fixed 2026-09-30.
+  COMPANY_DETAILS:       'CompanyDetails',        // edit the company record
+  DOCUMENTS:             'Documents',             // KYC verification (4 fixed slots)
+  SUPPLIER_LIST:         'SupplierList',          // ERP suppliers (module: purchases)
+  NOTIFICATION_SETTINGS: 'NotificationSettings',  // push / in-app notification prefs
+  HELP_SUPPORT:          'HelpSupport',
 
   // ── ERP modules (wholesaler parity) ──────────────────────────
   // Sales
