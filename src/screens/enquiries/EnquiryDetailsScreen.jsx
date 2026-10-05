@@ -25,27 +25,26 @@ import { enquiryService } from '../../services/enquiryService';
 import { orderService } from '../../services/orderService';
 import { SCREENS } from '../../constants';
 import useAuth from '../../hooks/useAuth';
+import { enquirySeen } from '../../utils/enquirySeen';
 
 const STATUS_TRANSITIONS = {
-  New:         ['Viewed', 'Replied', 'Negotiation', 'Confirmed', 'Cancelled'],
-  Viewed:      ['Replied', 'Negotiation', 'Confirmed', 'Cancelled'],
-  Replied:     ['Negotiation', 'Confirmed', 'Cancelled'],
-  Negotiation: ['Confirmed', 'Cancelled'],
+  New:         ['Viewed', 'Replied', 'Confirmed', 'Cancelled'],
+  Viewed:      ['Replied', 'Confirmed', 'Cancelled'],
+  Replied:     ['Confirmed', 'Cancelled'],
 };
-const CANCELLABLE = ['New', 'Viewed', 'Replied', 'Negotiation'];
+const CANCELLABLE = ['New', 'Viewed', 'Replied'];
 
 const STATUS_META = {
   New:         { chipBg: '#EFF6FF', chipText: '#2563EB' },
   Viewed:      { chipBg: '#F3F4F6', chipText: '#6B7280' },
   Replied:     { chipBg: '#FFF7ED', chipText: '#D97706' },
-  Negotiation: { chipBg: '#F5F3FF', chipText: '#7C3AED' },
   Confirmed:   { chipBg: '#F0FDF4', chipText: '#059669' },
   Cancelled:   { chipBg: '#FEF2F2', chipText: '#DC2626' },
 };
 
 export default function EnquiryDetailsScreen({ navigation, route }) {
   const { user } = useAuth();
-  const { enquiry: passedEnquiry, enquiryId } = route.params || {};
+  const { enquiry: passedEnquiry, enquiryId, seenUpdatedAt, seenKey, direction: routeDirection } = route.params || {};
   const initialId = enquiryId || passedEnquiry?.id || passedEnquiry?._raw?.id;
 
   const [enquiry, setEnquiry] = useState(passedEnquiry?._raw || passedEnquiry || null);
@@ -57,6 +56,10 @@ export default function EnquiryDetailsScreen({ navigation, route }) {
   const [actionLoading, setActionLoading] = useState(false);
   const [showReply, setShowReply] = useState(false);
   const [error, setError] = useState('');
+  // The enquiry row the inline Message/Reply panels act on. Defaults to the
+  // opened enquiry; a reply card sets it to THAT replier's own row so the
+  // conversation/history stays scoped to that one party.
+  const [activeRowId, setActiveRowId] = useState(null);
 
   // ── Modal states for Message and Reply ──
   const [messageModal, setMessageModal] = useState({ visible: false, seller: null, sellerId: null, enquiryIdForSeller: null });
@@ -124,9 +127,35 @@ export default function EnquiryDetailsScreen({ navigation, route }) {
       const msgList = msgRes.status === 'fulfilled' ? msgRes.value?.messages : [];
       setOffers(Array.isArray(offerList) ? offerList : []);
       setMessages(Array.isArray(msgList) ? msgList : []);
-      setReplies(repliesRes.status === 'fulfilled' ? (repliesRes.value || null) : null);
+      const repliesEnvelope = repliesRes.status === 'fulfilled' ? (repliesRes.value || null) : null;
+      setReplies(repliesEnvelope);
       const historyList = historyRes?.status === 'fulfilled' ? (historyRes.value?.replies || historyRes.value?.data?.replies || []) : [];
       setReplyHistory(Array.isArray(historyList) ? historyList : []);
+
+      // ── Mark SEEN at the LATEST activity timestamp ──
+      // The list's green dot compares the group's newest `updated_at` (across
+      // every recipient sibling) against what we last saw. The enquiry row we
+      // opened only carries ITS OWN `updated_at`, older than a reply sitting on
+      // a sibling row — so store the MAX of: the enquiry's updated_at, every
+      // reply's responded_at, and the newest message time. That matches (or
+      // exceeds) whatever the list can compute, so the dot clears on return.
+      const repliedRows =
+        (Array.isArray(repliesEnvelope?.data?.replied) ? repliesEnvelope.data.replied
+          : Array.isArray(repliesEnvelope?.replied) ? repliesEnvelope.replied
+          : []);
+      const candidateTimes = [
+        // The value the list itself used — guarantees "seen" is never behind.
+        seenUpdatedAt,
+        data?.updated_at || data?.updatedAt,
+        ...repliedRows.map(r => r.responded_at || r.updated_at || r.created_at),
+        ...(Array.isArray(msgList) ? msgList : []).map(m => m.created_at),
+      ].filter(Boolean).map(t => new Date(t).getTime()).filter(num => !Number.isNaN(num));
+      // +1s cushion so the stored "seen" sits a hair AHEAD of the list value.
+      const latestSeen = candidateTimes.length
+        ? new Date(Math.max(...candidateTimes) + 1000).toISOString()
+        : new Date().toISOString();
+      // Mark seen under the SAME stable key the list's dot checks (enq_code).
+      enquirySeen.markSeen(seenKey || initialId, latestSeen).catch(() => {});
 
       if (data?.status === 'New') {
         enquiryService.update(initialId, { status: 'Viewed' }).catch(() => {});
@@ -141,7 +170,7 @@ export default function EnquiryDetailsScreen({ navigation, route }) {
     } catch (err) {
       setError(err.message || 'Could not load enquiry.');
     }
-  }, [initialId]);
+  }, [initialId, seenKey, seenUpdatedAt]);
 
   useEffect(() => {
     (async () => { setLoading(true); await load(); setLoading(false); })();
@@ -279,6 +308,9 @@ export default function EnquiryDetailsScreen({ navigation, route }) {
       return;
     }
     setSending(true);
+    // Target the active row (a specific replier's row when the inline Reply
+    // panel was opened from a reply card), falling back to the opened enquiry.
+    const targetId = activeRowId || initialId;
     try {
       const payload = {
         offered_price: parseFloat(form.rate),
@@ -292,14 +324,14 @@ export default function EnquiryDetailsScreen({ navigation, route }) {
       //    New record every time — never overwrites a previous reply.
       let newEntry = null;
       try {
-        const saved = await enquiryService.createReplyHistory(initialId, payload);
+        const saved = await enquiryService.createReplyHistory(targetId, payload);
         newEntry = saved?.data || saved;
       } catch (histErr) {
         // Non-fatal — the status update below still records the latest quote.
       }
 
       // 2) Update the enquiry itself (moves status to Replied + carries latest quote).
-      await enquiryService.reply(initialId, {
+      await enquiryService.reply(targetId, {
         status: 'Replied',
         offered_price: parseFloat(form.rate),
         available_quantity: form.available_qty ? parseFloat(form.available_qty) : undefined,
@@ -312,7 +344,7 @@ export default function EnquiryDetailsScreen({ navigation, route }) {
         setReplyHistory(prev => [...(Array.isArray(prev) ? prev : []), newEntry]);
       } else {
         // Fall back to reloading the history from the server.
-        enquiryService.listReplyHistory(initialId)
+        enquiryService.listReplyHistory(targetId)
           .then(r => setReplyHistory(r?.replies || r?.data?.replies || []))
           .catch(() => {});
       }
@@ -399,11 +431,41 @@ export default function EnquiryDetailsScreen({ navigation, route }) {
   const productCode = enquiry.product?.code || enquiry.product_code || '';
   const qty = enquiry.qty ?? enquiry.quantity;
   const unit = enquiry.unit || '';
-  const isReceived = enquiry.is_recipient === true;
+  // RECEIVED vs raised. The retailer backend sets `is_recipient` (reliable) and
+  // `direction` ('received' | 'raised'). Prefer `is_recipient`; if the payload
+  // somehow lacks it, fall back to `direction`, then to the hint the list
+  // passed. Anything that is a 'sent'/'raised' direction is NOT received.
+  const isReceived =
+    enquiry.is_recipient === true ? true :
+    enquiry.is_recipient === false ? false :
+    enquiry.direction ? (enquiry.direction === 'received') :
+    routeDirection ? (routeDirection === 'received') :
+    true;
+  // ── Replies roster ──
+  // The /replies endpoint returns the whole envelope:
+  //   { data: { replied: [...], awaiting: [...], counts: {...} } }
+  // We only care about who actually ANSWERED, so unwrap `replied`. Accept all
+  // shapes (data.replied / replied / bare array) so cards render regardless.
+  const repliedList = Array.isArray(replies?.data?.replied) ? replies.data.replied
+    : Array.isArray(replies?.replied)   ? replies.replied
+    : Array.isArray(replies?.data)      ? replies.data
+    : Array.isArray(replies)            ? replies
+    : [];
+  // "SENT BY" = who raised this enquiry.
+  //  • RECEIVED → the company that sent it to us (sender).
+  //  • SENT     → US, the retailer. Pull our own business/contact from the
+  //    backend's `created_by` block (filled from retailer_* even without a
+  //    quotation). Previously this showed the recipient/seller name, which read
+  //    as if the admin/seller had sent it.
   const partyName = isReceived
-    ? (enquiry.sender?.name || '—')
-    : (enquiry.customer?.name || enquiry.seller?.name || '—');
-  const partyMobile = isReceived ? '' : (enquiry.customer?.mobile || enquiry.seller?.mobile || '');
+    ? (enquiry.sender?.name || enquiry.retailer_name || '—')
+    : (enquiry.created_by?.company || enquiry.created_by?.name || enquiry.retailer_name || '—');
+  const partyMobile = isReceived
+    ? (enquiry.sender?.mobile || enquiry.retailer_mobile || '')
+    : (enquiry.created_by?.mobile || enquiry.retailer_mobile || '');
+  const partyEmail = isReceived
+    ? (enquiry.sender?.email || enquiry.retailer_email || '')
+    : (enquiry.created_by?.email || enquiry.retailer_email || '');
   const location = enquiry.location || enquiry.delivery_location || '';
   const remarks = enquiry.remarks || enquiry.notes || '';
   const proposed = enquiry.proposed_price ?? enquiry.accepted_offer_price ?? null;
@@ -472,16 +534,16 @@ export default function EnquiryDetailsScreen({ navigation, route }) {
             <Text style={styles.detailSectionLabel}>SENT BY</Text>
             <Text style={styles.detailSenderName}>{partyName}</Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 4 }}>
-              {(enquiry.sender?.mobile || enquiry.retailer_mobile) ? (
+              {partyMobile ? (
                 <View style={styles.detailContact}>
                   <Ionicons name="call-outline" size={12} color={Colors.textSecondary} />
-                  <Text style={styles.detailContactText}>{enquiry.sender?.mobile || enquiry.retailer_mobile}</Text>
+                  <Text style={styles.detailContactText}>{partyMobile}</Text>
                 </View>
               ) : null}
-              {(enquiry.sender?.email || enquiry.retailer_email) ? (
+              {partyEmail ? (
                 <View style={styles.detailContact}>
                   <Ionicons name="mail-outline" size={12} color={Colors.textSecondary} />
-                  <Text style={styles.detailContactText}>{enquiry.sender?.email || enquiry.retailer_email}</Text>
+                  <Text style={styles.detailContactText}>{partyEmail}</Text>
                 </View>
               ) : null}
             </View>
@@ -492,6 +554,27 @@ export default function EnquiryDetailsScreen({ navigation, route }) {
               </View>
             ) : null}
           </View>
+
+          {/* ── Sent To ──
+              Only for a SINGLE-SELLER enquiry we raised. A BROADCAST goes to
+              many recipients, so naming one ("EzyEnquiry Admin") is misleading —
+              the wholesaler app hides this for broadcasts and shows the recipients
+              in the Replies section instead. So suppress it whenever this is a
+              broadcast (has broadcast_audience). */}
+          {!isReceived && !enquiry.broadcast_audience && enquiry.seller?.name ? (
+            <View style={[styles.detailSection, { backgroundColor: '#fafafa' }]}>
+              <Text style={styles.detailSectionLabel}>SENT TO</Text>
+              <Text style={styles.detailSenderName}>{enquiry.seller.name}</Text>
+              {(enquiry.seller?.city || enquiry.seller?.state) ? (
+                <View style={[styles.detailContact, { marginTop: 4 }]}>
+                  <Ionicons name="location-outline" size={12} color={Colors.textSecondary} />
+                  <Text style={styles.detailContactText}>
+                    {[enquiry.seller.city, enquiry.seller.state].filter(Boolean).join(', ')}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
 
           {/* ── Enquiry Details: Product · Qty · Budget ── */}
           <View style={[styles.detailSection, { backgroundColor: '#fafafa' }]}>
@@ -538,14 +621,67 @@ export default function EnquiryDetailsScreen({ navigation, route }) {
           </View>
         </View>
 
-        {/* ══ 3 CRM-style action buttons ══ */}
+        {/* ══ Replies section (who answered a SENT enquiry) ══
+            One ReplyCard per replier. Each card targets THAT replier's own row
+            id so the chat / reply history opened from it stays scoped to that
+            one party. Rendered BEFORE the shared action row so the cards carry
+            the per-replier actions. */}
+        {repliedList.length > 0 ? (
+          <Section title={`Replies (${repliedList.length})`}>
+            {repliedList.map((reply, idx) => {
+              const rowId = reply.id || reply._id || initialId;
+              return (
+                <ReplyCard
+                  key={rowId || idx}
+                  reply={reply}
+                  enquiryId={rowId}
+                  onReply={() => {
+                    // Open the inline Reply panel (handleSubmit posts to the
+                    // active row) scoped to THIS replier's row + history.
+                    setMessageModal({ visible: false, seller: null, sellerId: null, enquiryIdForSeller: null });
+                    setActiveRowId(rowId);
+                    setForm({ rate: '', available_qty: '', timeline: '', remarks: '' });
+                    setShowReply(true);
+                    enquiryService.listReplyHistory(rowId)
+                      .then(r => setReplyHistory(r?.replies || r?.data?.replies || []))
+                      .catch(() => setReplyHistory([]));
+                    scrollToBottomSoon();
+                  }}
+                  onMessage={() => {
+                    // Open the inline Message panel scoped to THIS replier's row
+                    // via the existing per-seller modal plumbing.
+                    setShowReply(false);
+                    setActiveRowId(rowId);
+                    openMessageModal(reply.company || null, reply.company?.id || reply.company?._id || null, rowId);
+                    scrollToBottomSoon();
+                  }}
+                  onReload={load}
+                />
+              );
+            })}
+          </Section>
+        ) : null}
+
+        {/* ══ 3 CRM-style action buttons ══
+            Shown for RECEIVED enquiries only — those were sent TO us and we must
+            reply. On a SENT enquiry WE raised, the sellers reply (their quotes
+            appear in the roster), so the Message/Reply/Cancel row is hidden.
+            Hidden too the moment reply cards exist: THEY carry the actions, so
+            this shared row would duplicate them. */}
         {(() => {
           const isCancelled = enquiry.status === 'Cancelled';
           const isConfirmed = enquiry.status === 'Confirmed';
           const canAct    = !isCancelled;
           const canCancel = !isCancelled && !isConfirmed;
+          // Show the shared Message/Reply/Cancel row ONLY when there are no reply
+          // cards: a RECEIVED enquiry we must answer with nobody having replied
+          // yet. The moment reply cards exist, THEY carry the actions, so this
+          // shared row would duplicate them — hide it. The inline Message/Reply
+          // panels still render (they open from the cards too).
+          const showSharedActions = isReceived && repliedList.length === 0;
           return (
             <>
+              {showSharedActions ? (
               <View style={styles.crmActions}>
                 {/* Message */}
                 <TouchableOpacity
@@ -553,6 +689,7 @@ export default function EnquiryDetailsScreen({ navigation, route }) {
                   onPress={() => {
                     if (!canAct) return;
                     setShowReply(false);
+                    setActiveRowId(initialId);
                     const willOpen = !messageModal.visible;
                     setMessageModal(prev => ({ visible: !prev.visible, seller: null, sellerId: null, enquiryIdForSeller: initialId }));
                     if (willOpen) {
@@ -574,6 +711,7 @@ export default function EnquiryDetailsScreen({ navigation, route }) {
                   onPress={() => {
                     if (!canAct) return;
                     setMessageModal({ visible: false, seller: null, sellerId: null, enquiryIdForSeller: null });
+                    setActiveRowId(initialId);
                     const willOpen = !showReply;
                     setShowReply(willOpen);
                     if (willOpen) {
@@ -611,6 +749,7 @@ export default function EnquiryDetailsScreen({ navigation, route }) {
                   </Text>
                 </TouchableOpacity>
               </View>
+              ) : null}
 
               {/* ── Inline Message panel ── */}
               {messageModal.visible ? (
@@ -618,7 +757,7 @@ export default function EnquiryDetailsScreen({ navigation, route }) {
                   <View style={styles.inlinePanelHeader}>
                     <Ionicons name="chatbubbles-outline" size={14} color="#FFF" />
                     <Text style={styles.inlinePanelTitle}>
-                      Chat with {partyName}
+                      Chat with {messageModal.seller?.name || partyName}
                     </Text>
                     <TouchableOpacity onPress={() => setMessageModal({ visible: false, seller: null, sellerId: null, enquiryIdForSeller: null })}>
                       <Ionicons name="close" size={16} color="#FFF" />
@@ -814,9 +953,153 @@ const TopBar = ({ code, onBack }) => (
 const Section = ({ title, children }) => (
   <View style={styles.section}>
     <Text style={styles.sectionTitle}>{title}</Text>
-    {children}
+    <View style={styles.sectionContent}>{children}</View>
   </View>
 );
+
+// ── Reply card component ──
+// One card per replier on a SENT enquiry: who replied (name, phone, city), a
+// GREEN status chip (red only when Cancelled), the offer line (price / avail /
+// delivery), their message, and 3 action buttons (Message, Reply, Cancel).
+// Message/Reply are wired by the parent to the existing per-seller inline
+// panels; Cancel marks THAT replier's row Cancelled and reloads.
+const ReplyCard = ({ reply, enquiryId, onReply, onMessage, onReload }) => {
+  // The /replies endpoint shapes each row as:
+  //   { id, company: { name, mobile, city, state, email }, status,
+  //     offered_price, available_quantity, delivery_timeline, message, responded_at }
+  // Fall back to older flat shapes too so this works regardless.
+  const company       = reply.company || null;
+  const replyerName   = company?.name || reply.company_name || reply.retailer_name || reply.wholesaler_name || 'Unknown';
+  const replierPhone  = company?.mobile || reply.mobile || reply.phone || '';
+  const replierCity   = company?.city || reply.city || '';
+  const offeredPrice  = reply.offered_price ?? reply.unit_price ?? null;
+  const availQty      = reply.available_quantity ?? null;
+  const deliveryTime  = reply.delivery_timeline || '';
+  const replyMessage  = reply.message || reply.notes || reply.remarks || '';
+  const replyStatus   = reply.status || '';
+  const unit          = reply.unit || '';
+  const respondedAt   = reply.responded_at || reply.created_at;
+  const replyTime = respondedAt
+    ? new Date(respondedAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+    : '';
+
+  return (
+    <View style={styles.replyCard}>
+      {/* ── Header: Who replied ── */}
+      <View style={styles.replyCardHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.replyCardName}>{replyerName}</Text>
+          {replierPhone ? (
+            <View style={styles.replyCardInfo}>
+              <Ionicons name="call-outline" size={12} color={Colors.textTertiary} />
+              <Text style={styles.replyCardInfoText}>{replierPhone}</Text>
+            </View>
+          ) : null}
+          {replierCity ? (
+            <View style={styles.replyCardInfo}>
+              <Ionicons name="location-outline" size={12} color={Colors.textTertiary} />
+              <Text style={styles.replyCardInfoText}>{replierCity}</Text>
+            </View>
+          ) : null}
+        </View>
+        <View style={{ alignItems: 'flex-end' }}>
+          {replyStatus ? (
+            // A reply arriving is a positive signal — show it GREEN so a
+            // Replied / Negotiation / Confirmed card reads at a glance as "they
+            // answered". Only Cancelled stays red.
+            <View style={[
+              styles.replyCardStatusChip,
+              replyStatus === 'Cancelled' ? styles.replyCardStatusChipRed : styles.replyCardStatusChipGreen,
+            ]}>
+              <Text style={[
+                styles.replyCardStatusText,
+                replyStatus === 'Cancelled' ? styles.replyCardStatusTextRed : styles.replyCardStatusTextGreen,
+              ]}>{replyStatus}</Text>
+            </View>
+          ) : null}
+          {replyTime ? <Text style={styles.replyCardTime}>{replyTime}</Text> : null}
+        </View>
+      </View>
+
+      {/* ── Offer details (price / qty / delivery) ── */}
+      {(offeredPrice != null || availQty != null || deliveryTime) ? (
+        <View style={styles.replyCardOffer}>
+          {offeredPrice != null ? (
+            <View style={styles.replyCardOfferItem}>
+              <Ionicons name="pricetag-outline" size={13} color={Colors.primary} />
+              <Text style={styles.replyCardPrice}>{formatCurrency(offeredPrice)}{unit ? ` / ${unit}` : ''}</Text>
+            </View>
+          ) : null}
+          {availQty != null ? (
+            <View style={styles.replyCardOfferItem}>
+              <Ionicons name="cube-outline" size={12} color={Colors.textSecondary} />
+              <Text style={styles.replyCardOfferText}>Avail: {availQty} {unit}</Text>
+            </View>
+          ) : null}
+          {deliveryTime ? (
+            <View style={styles.replyCardOfferItem}>
+              <Ionicons name="time-outline" size={12} color={Colors.textSecondary} />
+              <Text style={styles.replyCardOfferText}>{deliveryTime}</Text>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      {/* ── Message body ── */}
+      {replyMessage ? (
+        <View style={styles.replyCardMessage}>
+          <Text style={styles.replyCardMessageText}>{replyMessage}</Text>
+        </View>
+      ) : null}
+
+      {/* ── Action buttons: Message, Reply, Cancel ── */}
+      <View style={styles.replyCardActions}>
+        <TouchableOpacity
+          style={[styles.replyCardBtn, styles.replyCardBtnOrange]}
+          onPress={onMessage}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="chatbubble-outline" size={14} color="#FFF" />
+          <Text style={styles.replyCardBtnText}>Message</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.replyCardBtn, styles.replyCardBtnOrange]}
+          onPress={onReply}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="return-down-forward-outline" size={14} color="#FFF" />
+          <Text style={styles.replyCardBtnText}>Reply</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.replyCardBtn, styles.replyCardBtnRed]}
+          onPress={() => {
+            Alert.alert(
+              'Cancel this enquiry?',
+              'This enquiry will be marked as Cancelled.',
+              [
+                { text: 'Keep', style: 'cancel' },
+                { text: 'Cancel', style: 'destructive', onPress: async () => {
+                  try {
+                    await enquiryService.update(enquiryId, { status: 'Cancelled' });
+                    onReload?.();
+                  } catch (err) {
+                    Alert.alert('Error', err.message || 'Could not cancel.');
+                  }
+                }}
+              ]
+            );
+          }}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="close-circle-outline" size={14} color="#FFF" />
+          <Text style={styles.replyCardBtnText}>Cancel</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+};
 
 const Field = ({ label, ...rest }) => (
   <View style={styles.fieldWrap}>
@@ -943,6 +1226,7 @@ const styles = StyleSheet.create({
   detailSenderName: { fontSize: 15, fontWeight: '700', color: '#0f172a' },
   detailContact: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   detailContactText: { fontSize: 12, color: '#64748b' },
+  sentToHint: { fontSize: 11, color: '#f97316', fontWeight: '700', marginTop: 6 },
   detailFieldLabel: { fontSize: 10, color: '#94a3b8', marginBottom: 3 },
   detailFieldValue: { fontSize: 13, fontWeight: '700', color: '#1e293b' },
   specsBox: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#e2e8f0' },
@@ -970,4 +1254,65 @@ const styles = StyleSheet.create({
   inlineChatInput: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 10, backgroundColor: Colors.background },
   inlineMsgInput: { flex: 1, backgroundColor: Colors.white, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 9, fontSize: 14, color: Colors.textPrimary, maxHeight: 80, borderWidth: 1, borderColor: Colors.border },
   inlineSendBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
+
+  /* ── Section content wrapper (used by the Replies section) ── */
+  sectionContent: { gap: 10 },
+
+  /* ── Reply card (per-replier on a SENT enquiry) ── */
+  replyCard: {
+    backgroundColor: Colors.white,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    padding: 14,
+    marginBottom: 10,
+    ...Shadows.sm,
+  },
+  replyCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  replyCardName: { fontSize: 15, fontWeight: '700', color: Colors.textPrimary, marginBottom: 6 },
+  replyCardInfo: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 3 },
+  replyCardInfoText: { fontSize: 11, color: Colors.textTertiary },
+  replyCardTime: { fontSize: 10, color: Colors.textTertiary, marginTop: 4 },
+  replyCardStatusChip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
+  replyCardStatusChipGreen: { backgroundColor: '#DCFCE7' },
+  replyCardStatusChipRed:   { backgroundColor: '#FEE2E2' },
+  replyCardStatusText: { fontSize: 10, fontWeight: '700' },
+  replyCardStatusTextGreen: { color: '#16a34a' },
+  replyCardStatusTextRed:   { color: '#DC2626' },
+  replyCardOffer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 14,
+    marginBottom: 10,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  replyCardOfferItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  replyCardPrice: { fontSize: 15, fontWeight: '800', color: Colors.primary },
+  replyCardOfferText: { fontSize: 12, color: Colors.textSecondary },
+  replyCardMessage: { backgroundColor: Colors.primaryBg, borderRadius: 8, padding: 10, marginBottom: 12 },
+  replyCardMessageText: { fontSize: 13, color: Colors.textPrimary, lineHeight: 18 },
+  replyCardActions: { flexDirection: 'row', gap: 8 },
+  replyCardBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+  },
+  replyCardBtnOrange: { backgroundColor: '#f97316' },
+  replyCardBtnRed: { backgroundColor: '#ef4444' },
+  replyCardBtnText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
 });

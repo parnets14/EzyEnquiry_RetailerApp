@@ -17,7 +17,7 @@ import { enquiryApi, notificationApi } from '../../utils/api';
 import { goToSearch } from '../../utils/navigation';
 import { SCREENS } from '../../constants';
 
-const TABS = ['All', 'New', 'Viewed', 'Replied', 'Negotiation', 'Confirmed', 'Cancelled'];
+const TABS = ['All', 'New', 'Viewed', 'Replied', 'Confirmed', 'Cancelled'];
 
 // Map a backend enquiry into a quotation-shaped record for the retailer.
 function mapQuotation(e) {

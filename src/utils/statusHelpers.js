@@ -8,8 +8,6 @@ export const getEnquiryStatusStyle = (status) => {
       return { color: Colors.enquiryViewed, backgroundColor: Colors.enquiryViewedBg };
     case 'Replied':
       return { color: Colors.enquiryReplied, backgroundColor: Colors.enquiryRepliedBg };
-    case 'Negotiation':
-      return { color: Colors.enquiryNegotiation, backgroundColor: Colors.enquiryNegotiationBg };
     case 'Confirmed':
     case 'Accepted':
       return { color: Colors.enquiryConfirmed, backgroundColor: Colors.enquiryConfirmedBg };
@@ -65,7 +63,7 @@ export const getQuotationStatusLabel = (status) => {
     case 'New': return 'Sent · Awaiting Wholesaler';
     case 'Viewed': return 'Viewed by Wholesaler';
     case 'Replied': return 'Quoted';
-    case 'Negotiation': return 'In Negotiation';
+
     case 'Confirmed': return 'Confirmed → Sales Order';
     case 'Cancelled': return 'Cancelled';
     default: return status || '—';

@@ -69,7 +69,7 @@ const CARD_SHADOW = {
  */
 
 // Group broadcast enquiries — N sibling rows (one per recipient) → one card
-const STATUS_RANK_H = { Cancelled: 0, New: 1, Viewed: 2, Replied: 3, Negotiation: 4, Confirmed: 5 };
+const STATUS_RANK_H = { Cancelled: 0, New: 1, Viewed: 2, Replied: 3, Confirmed: 5 };
 function groupBroadcastsHome(rows) {
   const byCode = new Map();
   for (const r of rows) {
@@ -81,7 +81,7 @@ function groupBroadcastsHome(rows) {
     if (members.length === 1) return members[0];
     const status = members.map(m => m.status).sort((a, b) => (STATUS_RANK_H[b] ?? 1) - (STATUS_RANK_H[a] ?? 1))[0];
     const replied = members.filter(m =>
-      ['Replied','Negotiation','Confirmed'].includes(m.status) || m.offered_price != null
+      ['Replied','Confirmed'].includes(m.status) || m.offered_price != null
     ).length;
     return { ...members[0], __group: true, __count: members.length, __replied: replied, status };
   });
@@ -133,7 +133,6 @@ const ENQ_STATUS = {
   New:         { color: '#2563EB', bg: '#EFF6FF' },
   Viewed:      { color: '#6B7280', bg: '#F3F4F6' },
   Replied:     { color: '#D97706', bg: '#FFF7ED' },
-  Negotiation: { color: '#7C3AED', bg: '#F5F3FF' },
   Confirmed:   { color: '#059669', bg: '#ECFDF5' },
   Cancelled:   { color: '#DC2626', bg: '#FEF2F2' },
 };

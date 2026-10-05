@@ -56,17 +56,17 @@ import EmptyState from '../../components/common/EmptyState';
 import useEnquiries from '../../hooks/useEnquiries';
 import { formatDate, formatCurrency } from '../../utils/formatters';
 import { SCREENS } from '../../constants';
+import { enquirySeen } from '../../utils/enquirySeen';
 
 // The backend's raw status vocabulary, in lifecycle order — same 7 tabs as the
 // wholesaler. Confirmed/Cancelled are shown as-is, not relabelled.
-const STATUS_TABS = ['All', 'New', 'Viewed', 'Replied', 'Negotiation', 'Confirmed', 'Cancelled'];
+const STATUS_TABS = ['All', 'New', 'Viewed', 'Replied', 'Confirmed', 'Cancelled'];
 
 // Same palette as the wholesaler's STATUS_META.
 const STATUS_META = {
   New:         { bg: '#EFF6FF', text: '#2563EB', dot: '#3B82F6' },
   Viewed:      { bg: '#F3F4F6', text: '#6B7280', dot: '#9CA3AF' },
   Replied:     { bg: '#FFF7ED', text: '#D97706', dot: '#F59E0B' },
-  Negotiation: { bg: '#F5F3FF', text: '#7C3AED', dot: '#8B5CF6' },
   Confirmed:   { bg: '#F0FDF4', text: '#059669', dot: '#10B981' },
   Cancelled:   { bg: '#FEF2F2', text: '#DC2626', dot: '#F87171' },
 };
@@ -77,10 +77,10 @@ const STATUS_META = {
 // near-identical cards for a single action, which reads as "it created it many
 // times". Group by code and summarise: how many sellers, how many replied, and
 // the best quote so far.
-const STATUS_RANK = { Cancelled: 0, New: 1, Viewed: 2, Replied: 3, Negotiation: 4, Confirmed: 5 };
+const STATUS_RANK = { Cancelled: 0, New: 1, Viewed: 2, Replied: 3, Confirmed: 5 };
 
 const rowHasReplied = (r) =>
-  ['Replied', 'Negotiation', 'Confirmed'].includes(r.status)
+  ['Replied', 'Confirmed'].includes(r.status)
   || !!(r.distributor_reply || '').trim()
   || r.accepted_offer_price != null
   || r.available_quantity != null;
@@ -93,18 +93,32 @@ function groupBroadcasts(rows) {
     byCode.get(key).push(r);
   }
   return [...byCode.values()].map(members => {
-    if (members.length === 1) return members[0];
+    // Stable seen-key per broadcast — the enquiry_code never changes, whereas
+    // `members[0].id` can shift if the API re-orders siblings after a reply.
+    // Keying the green-dot's seen-state off this keeps "mark seen" and "is new?"
+    // in agreement so the dot clears reliably.
+    const seenKey = members[0].enquiry_code || String(members[0].id);
+    if (members.length === 1) return { ...members[0], __seenKey: seenKey };
     const status = members
       .map(m => m.status)
       .sort((a, b) => (STATUS_RANK[b] ?? 1) - (STATUS_RANK[a] ?? 1))[0];
     const prices = members.map(m => +(m.accepted_offer_price || 0)).filter(Boolean);
+    // The group's "last activity" is the NEWEST updated_at across every sibling
+    // row — so the green dot lights up when ANY recipient acts, not just the
+    // first member we happened to spread below.
+    const latestUpdated = members
+      .map(m => m.updated_at || m.updatedAt || m.created_at)
+      .filter(Boolean)
+      .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0];
     return {
       ...members[0],
       __group: true,
       __count: members.length,
       __replied: members.filter(rowHasReplied).length,
+      __seenKey: seenKey,
       status,
       accepted_offer_price: prices.length ? Math.min(...prices) : null,
+      updated_at: latestUpdated || members[0].updated_at,
     };
   });
 }
@@ -117,14 +131,21 @@ export default function EnquiriesScreen({ navigation }) {
   // 'sent'     = raised BY this retailer (we are waiting on answers)
   const [dirTab,     setDirTab]     = useState('received');
   const [refreshing, setRefreshing] = useState(false);
+  // Device-local "last seen" map { enquiryId: ISO } — drives the green "new
+  // activity" dot. Reloaded on every focus so a dot clears after you open the
+  // enquiry and come back.
+  const [seenMap, setSeenMap] = useState({});
 
   // Same hook the wholesaler uses. It loads ALL enquiries once (limit 100) and
   // exposes the "new" count — that is what keeps every tab badge accurate.
   // We keep a focus reload on top so returning from a detail screen (where the
   // status may have moved New → Viewed) refreshes the list.
-  const { enquiries, loading, error, refetch, unreadCount } = useEnquiries();
+  const { enquiries, loading, error, refetch } = useEnquiries();
 
-  useFocusEffect(useCallback(() => { refetch(); }, [refetch]));
+  useFocusEffect(useCallback(() => {
+    refetch();
+    enquirySeen.getAll().then(setSeenMap).catch(() => setSeenMap({}));
+  }, [refetch]));
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -141,16 +162,37 @@ export default function EnquiriesScreen({ navigation }) {
 
   const list         = Array.isArray(enquiries) ? enquiries : [];
   const activeStatus = STATUS_TABS[tabIdx];
-  const newCount     = unreadCount;
 
   // `is_recipient` comes from the backend: a broadcast row carries the RECIPIENT
   // as `company_id`, so the same document is "received" in one app and "sent" in
   // another. Splitting here keeps the status pills scoped to the visible tab.
   const isSentOf     = (e) => e.is_recipient !== true;
+
+  // "New" count for the header — counted as CARDS, not raw rows. The hook's
+  // `unreadCount` counts every row with status 'New', so a single broadcast WE
+  // sent to N recipients inflates it by N (that was the "9 new" with only a few
+  // cards). Group the sent side first, then count 'New' cards on each side —
+  // exactly like the "total" count below.
+  const newCount = (
+    groupBroadcasts(list.filter(isSentOf)).filter(e => e.status === 'New').length
+    + list.filter(e => !isSentOf(e) && e.status === 'New').length
+  );
   const byDirection  = list.filter(e => (dirTab === 'received' ? !isSentOf(e) : isSentOf(e)));
   // Received stays one card per enquiry (each is addressed to us and needs its
   // own reply); Sent collapses each broadcast into a single card.
   const dirRows      = dirTab === 'sent' ? groupBroadcasts(byDirection) : byDirection;
+
+  // Does the SENT tab have any unseen activity? Group the sent broadcasts and
+  // ask the seen-tracker if any one of them changed since it was last opened —
+  // this drives the green notification dot on the "Sent" tab button.
+  const sentHasNewActivity = groupBroadcasts(list.filter(isSentOf))
+    .some(e => enquirySeen.isNew(e, seenMap));
+
+  // Same for the RECEIVED tab — a new reply/message/status change (or a freshly
+  // arrived enquiry) lights its tab dot too. Received rows are per-enquiry (not
+  // grouped), so we check them directly.
+  const receivedHasNewActivity = list.filter(e => !isSentOf(e))
+    .some(e => enquirySeen.isNew(e, seenMap));
 
   const q = search.trim().toLowerCase();
   const filtered = dirRows.filter(e => {
@@ -249,6 +291,13 @@ export default function EnquiriesScreen({ navigation }) {
               <Text style={[styles.dirBtnText, active && styles.dirBtnTextActive]}>
                 {t.label} ({n})
               </Text>
+              {/* Notification dot — only on the Sent tab, only when some sent
+                  enquiry has unseen activity (a reply/message/cancel). Clears
+                  once each such enquiry has been opened. */}
+              {((t.key === 'sent' && sentHasNewActivity) ||
+                (t.key === 'received' && receivedHasNewActivity)) ? (
+                <View style={styles.dirBtnDot} />
+              ) : null}
             </TouchableOpacity>
           );
         })}
@@ -303,7 +352,9 @@ export default function EnquiriesScreen({ navigation }) {
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.primary]} />}
-          renderItem={({ item }) => <EnquiryCardRow item={item} navigation={navigation} />}
+          renderItem={({ item }) => (
+            <EnquiryCardRow item={item} navigation={navigation} isNewActivity={enquirySeen.isNew(item, seenMap)} />
+          )}
           ListEmptyComponent={
             <EmptyState
               iconName="mail-open-outline"
@@ -333,19 +384,24 @@ export default function EnquiriesScreen({ navigation }) {
   );
 }
 
-const EnquiryCardRow = ({ item, navigation }) => {
+const EnquiryCardRow = ({ item, navigation, isNewActivity }) => {
   const meta  = STATUS_META[item.status] || STATUS_META.New;
   const isNew = item.status === 'New';
   const isReceived = item.is_recipient === true;
 
-  // For received: show who sent it (the wholesaler/admin company name)
-  // For sent grouped: product name is the primary label (handled in sent tab)
+  // Who to show on the card's party line:
+  //  • RECEIVED → the company that SENT it to us (sender / retailer_name).
+  //  • SENT     → US, the retailer who raised it. The meaningful "who is
+  //    sending this" is our own business + contact, which the backend returns
+  //    in `created_by` (name/company/mobile/email, filled from retailer_* even
+  //    when there's no quotation). Previously this showed the recipient/seller
+  //    ("EzyEnquiry Admin"), which read as if the admin had sent it.
   const senderName = isReceived
     ? (item.sender?.name || item.retailer_name || '—')
-    : (item.customer?.name || item.seller?.name || null);
+    : (item.created_by?.company || item.created_by?.name || item.retailer_name || '—');
   const senderMobile = isReceived
     ? (item.sender?.mobile || item.retailer_mobile || '')
-    : '';
+    : (item.created_by?.mobile || item.retailer_mobile || '');
 
   const productName = item.product?.name || item.product?.code || item.product_name || '—';
   const offeredPrice = item.accepted_offer_price || item.offered_price || null;
@@ -354,7 +410,17 @@ const EnquiryCardRow = ({ item, navigation }) => {
   return (
     <TouchableOpacity
       style={[styles.card, isNew && styles.cardNew]}
-      onPress={() => navigation.navigate(SCREENS.ENQUIRY_DETAILS, { enquiryId: item.id })}
+      onPress={() => navigation.navigate(SCREENS.ENQUIRY_DETAILS, {
+        enquiryId: item.id,
+        // Pass the exact value the list used to decide the green dot + the stable
+        // per-broadcast key, so the detail screen stores "seen" under the same
+        // key/time the dot checks and it clears reliably on return.
+        seenUpdatedAt: item.updated_at || item.updatedAt || null,
+        seenKey: item.__seenKey || item.id || null,
+        // The list already knows SENT vs RECEIVED (is_recipient); pass it so the
+        // detail screen is correct even if the single GET lacks `direction`.
+        direction: item.is_recipient === true ? 'received' : 'sent',
+      })}
       activeOpacity={0.78}
     >
       {isNew && <View style={styles.newStrip} />}
@@ -364,14 +430,24 @@ const EnquiryCardRow = ({ item, navigation }) => {
         {/* ── Row 1: Code + Status chip ── */}
         <View style={styles.cardRow}>
           <View style={styles.codeWrap}>
+            {/* Green "new activity" dot — someone replied / messaged / cancelled
+                / moved status since this enquiry was last opened on this device. */}
+            {isNewActivity ? <View style={styles.activityDot} /> : null}
             <Ionicons name="pricetag-outline" size={12} color={Colors.textTertiary} />
             <Text style={styles.enqCode}>
               {item.enquiry_code || item.enq_code || `#${String(item.id || '').slice(-6)}`}
             </Text>
           </View>
-          <View style={[styles.chip, { backgroundColor: meta.bg }]}>
-            <View style={[styles.chipDot, { backgroundColor: meta.dot }]} />
-            <Text style={[styles.chipText, { color: meta.text }]}>{item.status}</Text>
+          <View style={styles.cardRowRight}>
+            {isNewActivity ? (
+              <View style={styles.newActivityBadge}>
+                <Text style={styles.newActivityBadgeText}>NEW</Text>
+              </View>
+            ) : null}
+            <View style={[styles.chip, { backgroundColor: meta.bg }]}>
+              <View style={[styles.chipDot, { backgroundColor: meta.dot }]} />
+              <Text style={[styles.chipText, { color: meta.text }]}>{item.status}</Text>
+            </View>
           </View>
         </View>
 
@@ -387,14 +463,20 @@ const EnquiryCardRow = ({ item, navigation }) => {
             ) : null}
           </View>
         ) : (
-          <>
-            {senderName ? <Text style={styles.partyName} numberOfLines={1}>{senderName}</Text> : null}
-            {item.__group && item.__replied > 0 ? (
-              <Text style={[styles.groupSub, { color: '#10b981' }]}>
-                {item.__replied} {item.__replied === 1 ? 'reply' : 'replies'} received
-              </Text>
+          <View style={{ marginTop: 6, marginBottom: 2 }}>
+            {senderName ? (
+              <>
+                <Text style={styles.partyLabel}>SENT BY</Text>
+                <Text style={styles.partyName} numberOfLines={1}>{senderName}</Text>
+              </>
             ) : null}
-          </>
+            {senderMobile ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                <Ionicons name="call-outline" size={11} color={Colors.textTertiary} />
+                <Text style={styles.metaText}>{senderMobile}</Text>
+              </View>
+            ) : null}
+          </View>
         )}
 
         {/* ── Row 3: Product ── */}
@@ -417,8 +499,11 @@ const EnquiryCardRow = ({ item, navigation }) => {
           ) : null}
         </View>
 
-        {/* ── Row 5: Offered ₹ + Availability (mirrors CRM "Offered ₹" column) ── */}
-        {(offeredPrice || availQty != null) ? (
+        {/* ── Row 5: Offered ₹ + Availability ──
+            RECEIVED only. On a SENT broadcast the price/qty come from recipients'
+            replies, and we deliberately keep reply details OFF the sent card —
+            the green dot signals activity; the detail screen shows who said what. */}
+        {isReceived && (offeredPrice || availQty != null) ? (
           <View style={[styles.metaRow, { marginTop: 4 }]}>
             {offeredPrice ? (
               <View style={styles.metaItem}>
@@ -505,6 +590,14 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.button,
     backgroundColor: Colors.background,
     borderWidth: 1.5, borderColor: 'transparent',
+    position: 'relative',
+  },
+  dirBtnDot: {
+    position: 'absolute',
+    top: 6, right: 10,
+    width: 9, height: 9, borderRadius: 5,
+    backgroundColor: '#10B981',
+    borderWidth: 1.5, borderColor: Colors.white,
   },
   dirBtnActive: { backgroundColor: Colors.primaryBg, borderColor: Colors.primary },
   dirBtnText: { fontSize: 12.5, fontWeight: '700', color: Colors.textSecondary },
@@ -554,14 +647,33 @@ const styles = StyleSheet.create({
 
   cardRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   cardRowLast: { marginTop: 4, marginBottom: 0 },
+  cardRowRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   codeWrap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   enqCode: { fontSize: 11, fontWeight: '700', color: Colors.textTertiary, letterSpacing: 0.3 },
+
+  /* ── New-activity indicators ── */
+  activityDot: {
+    width: 8, height: 8, borderRadius: 4,
+    backgroundColor: '#10B981',
+    marginRight: 2,
+  },
+  newActivityBadge: {
+    backgroundColor: '#10B981',
+    borderRadius: 8,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  newActivityBadgeText: {
+    fontSize: 9, fontWeight: '800', color: '#FFF', letterSpacing: 0.5,
+  },
 
   chip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 9, paddingVertical: 3, borderRadius: 10 },
   chipDot: { width: 6, height: 6, borderRadius: 3 },
   chipText: { fontSize: 11, fontWeight: '700' },
 
   partyName: { fontSize: 15, fontWeight: '700', color: Colors.textPrimary, marginBottom: 5 },
+  partyLabel: { fontSize: 9.5, fontWeight: '800', color: Colors.textTertiary, letterSpacing: 0.6, marginBottom: 1 },
+  sentToText: { fontSize: 11.5, color: Colors.textSecondary, marginTop: 2 },
   groupSub: { fontSize: 11.5, color: Colors.primary, fontWeight: '700', marginBottom: 5 },
 
   productRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 6 },
